@@ -1,0 +1,6 @@
+apiVersion: v2
+name: dynamic-pac
+description: A dynamic PAC proxy auto-configuration server
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

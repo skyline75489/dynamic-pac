@@ -1,0 +1,46 @@
+replicaCount: 1
+
+image:
+  repository: dynamic-pac
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Required: the SOCKS5 proxy string injected into the PAC file.
+pacProxy: ""
+
+# Required: the remote URL to fetch the PAC rules from.
+remotePacUrl: ""
+
+# Optional: SOCKS5 proxy for outbound fetches (socks5://host:port).
+fetchProxy: ""
+
+# Seconds before the cached PAC is considered stale.
+cacheTtl: "86400"
+
+# Optional: Redis URL for durable caching (redis://host:port).
+redisUrl: ""
+
+# Path to the bundled fallback PAC file inside the image.
+fallbackPacPath: "fallback.pac"
+
+service:
+  type: ClusterIP
+  port: 8080
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
+
+probes:
+  liveness:
+    path: /health
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  readiness:
+    path: /proxy.pac
+    initialDelaySeconds: 5
+    periodSeconds: 10
