@@ -7,7 +7,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py fallback.pac ./
+COPY app.py fallback.pac fallback_ip_cn.json ./
 
 RUN useradd -m appuser && chown -R appuser:appuser /app
 USER appuser

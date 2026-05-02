@@ -14,14 +14,22 @@ remotePacUrl: ""
 # Optional: SOCKS5 proxy for outbound fetches (socks5://host:port).
 fetchProxy: ""
 
-# Seconds before the cached PAC is considered stale.
-cacheTtl: "86400"
+# Seconds before the cached remote PAC is considered stale.
+gfwlistCacheTtl: "86400"
 
 # Optional: Redis URL for durable caching (redis://host:port).
 redisUrl: ""
 
 # Path to the bundled fallback PAC file inside the image.
 fallbackPacPath: "fallback.pac"
+
+# Path to the fallback China IP data file (JSON CIDR list).
+# Generated on first successful APNIC fetch; used when APNIC is unreachable.
+fallbackIpCnPath: "fallback_ip_cn.json"
+
+# Redis TTL for cached China IP data (seconds, default 7 days).
+# Flora PAC data is refreshed in background when this expires.
+floraCacheTtl: "604800"
 
 service:
   type: ClusterIP

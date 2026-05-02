@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Response, Query
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,7 +22,7 @@ LISTEN_PORT = int(os.getenv("LISTEN_PORT", "8080"))
 PAC_PROXY = os.getenv("PAC_PROXY", "").strip()
 REMOTE_PAC_URL = os.getenv("REMOTE_PAC_URL", "").strip()
 FETCH_PROXY = os.getenv("FETCH_PROXY", "").strip()
-CACHE_TTL = int(os.getenv("CACHE_TTL", "86400"))
+GFWLIST_CACHE_TTL = int(os.getenv("GFWLIST_CACHE_TTL", "86400"))
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 FALLBACK_PAC_PATH = os.getenv("FALLBACK_PAC_PATH", "fallback.pac").strip()
 
@@ -41,19 +41,20 @@ if REDIS_URL:
     import redis.asyncio as aioredis
 
     _redis = aioredis.from_url(REDIS_URL)
+    set_flora_redis(_redis)
     logger.info("Redis configured: %s", REDIS_URL)
 
 REDIS_CONTENT_KEY = "dynamic-pac:content"
 
 # ---------------------------------------------------------------------------
-# In-memory cache
+# In-memory cache (for remote PAC)
 # ---------------------------------------------------------------------------
 _cached_pac: str | None = None
 _cached_at: float = 0.0
 _refresh_lock = asyncio.Lock()
 
 # ---------------------------------------------------------------------------
-# Proxy injection
+# Proxy injection — remote PAC format (var proxy = '...')
 # ---------------------------------------------------------------------------
 PROXY_RE = re.compile(r"var\s+proxy\s*=\s*'[^']*'\s*;")
 
@@ -63,6 +64,11 @@ def _inject_proxy(content: str) -> str:
         logger.warning("proxy var not found in PAC — prepending")
         new = f"var proxy = '{PAC_PROXY}';\n{content}"
     return new
+
+# ---------------------------------------------------------------------------
+# Flora PAC provider
+# ---------------------------------------------------------------------------
+from flora.provider import fetch_and_cache_ip_data, get_pac_content, set_redis as set_flora_redis, is_ready as is_flora_ready
 
 # ---------------------------------------------------------------------------
 # Data sources
@@ -104,8 +110,8 @@ async def _write_redis(content: str) -> None:
     if _redis is None:
         return
     try:
-        await _redis.set(REDIS_CONTENT_KEY, content, ex=CACHE_TTL)
-        logger.info("Written to Redis (TTL=%ds)", CACHE_TTL)
+        await _redis.set(REDIS_CONTENT_KEY, content, ex=GFWLIST_CACHE_TTL)
+        logger.info("Written to Redis (TTL=%ds)", GFWLIST_CACHE_TTL)
     except Exception:
         logger.exception("Redis write failed")
 
@@ -124,7 +130,7 @@ def _load_fallback() -> str | None:
         return None
 
 # ---------------------------------------------------------------------------
-# Cache logic
+# Cache logic (remote PAC)
 # ---------------------------------------------------------------------------
 async def _seed_cache() -> None:
     global _cached_pac, _cached_at
@@ -154,7 +160,7 @@ async def _seed_cache() -> None:
 def _is_stale() -> bool:
     if _cached_pac is None:
         return True
-    return (time.monotonic() - _cached_at) >= CACHE_TTL
+    return (time.monotonic() - _cached_at) >= GFWLIST_CACHE_TTL
 
 
 def _trigger_refresh() -> None:
@@ -190,8 +196,14 @@ async def _do_refresh() -> None:
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    # Seed the remote PAC cache
     await _seed_cache()
+
+    # Fetch Flora IP data in background (doesn't block startup)
+    asyncio.create_task(fetch_and_cache_ip_data())
+
     yield
+
     if _redis is not None:
         await _redis.aclose()
 
@@ -199,7 +211,28 @@ app = FastAPI(lifespan=_lifespan)
 
 
 @app.get("/proxy.pac")
-async def proxy_pac():
+async def proxy_pac(
+    source: str = Query("remote", description="PAC source: 'remote' (default) or 'flora'"),
+    hash_base: int = Query(3011, ge=1001, le=99999, description="Hash table size for Flora PAC (default: 3011)"),
+    mask_step: int = Query(2, ge=1, le=8, description="Network mask fragmentation step for Flora PAC (default: 2)"),
+):
+    if source == "flora":
+        if not is_flora_ready():
+            return Response(
+                status_code=503,
+                content="Flora PAC not yet ready (still fetching APNIC data)",
+            )
+
+        content = get_pac_content(hash_base, mask_step, PAC_PROXY)
+        if content is None:
+            return Response(status_code=503, content="Flora PAC unavailable")
+
+        return Response(
+            content=content,
+            media_type="application/x-ns-proxy-autoconfig",
+        )
+
+    # Default: remote PAC
     if _is_stale():
         _trigger_refresh()
 
@@ -214,9 +247,23 @@ async def proxy_pac():
 
 @app.get("/health")
 async def health():
-    if _cached_pac is None:
-        return Response(status_code=503)
-    return {"status": "ok"}
+    remote_ok = _cached_pac is not None
+    flora_ok = is_flora_ready()
+
+    if not remote_ok:
+        return Response(
+            status_code=503,
+            content={
+                "status": "degraded",
+                "remote_pac": False,
+                "flora_pac": flora_ok,
+            },
+        )
+    return {
+        "status": "ok",
+        "remote_pac": True,
+        "flora_pac": flora_ok,
+    }
 
 
 if __name__ == "__main__":
