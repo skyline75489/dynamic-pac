@@ -34,6 +34,11 @@ if not REMOTE_PAC_URL:
 logger = logging.getLogger("dynamic-pac")
 
 # ---------------------------------------------------------------------------
+# Flora PAC provider
+# ---------------------------------------------------------------------------
+from flora.provider import fetch_and_cache_ip_data, get_pac_content, set_redis as set_flora_redis, is_ready as is_flora_ready
+
+# ---------------------------------------------------------------------------
 # Redis (optional)
 # ---------------------------------------------------------------------------
 _redis = None
@@ -80,11 +85,6 @@ def _minify_js(content: str) -> str:
     content = re.sub(r"[ \t]+$", "", content, flags=re.MULTILINE)
     return content.strip()
 
-
-# ---------------------------------------------------------------------------
-# Data sources
-# ---------------------------------------------------------------------------
-from flora.provider import fetch_and_cache_ip_data, get_pac_content, set_redis as set_flora_redis, is_ready as is_flora_ready
 
 # ---------------------------------------------------------------------------
 # Data sources
