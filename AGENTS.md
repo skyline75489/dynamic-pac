@@ -22,6 +22,7 @@ Both sources serve stale data during background refreshes — requests never blo
 | `/proxy.pac` | Remote gfwlist PAC with proxy injected |
 | `/proxy.pac?source=flora` | Flora PAC with proxy injected |
 | `/proxy.pac?source=flora&hash_base=5003&mask_step=1` | Flora PAC with custom hash table size and mask step |
+| `/proxy.pac?minify=true` | Either source with comments/whitespace stripped |
 | `/health` | Returns 200 with `{remote_pac, flora_pac}` status |
 
 ## Configuration (env vars)
@@ -39,7 +40,16 @@ Both sources serve stale data during background refreshes — requests never blo
 | `FLORA_FALLBACK_PATH` | no | `fallback_ip_cn.json` | Local file for China IP data when APNIC + Redis fail |
 | `FLORA_CACHE_TTL` | no | `604800` | Seconds before Flora IP data cache is stale (7 days) |
 
-## Flora PAC query parameters
+## Query parameters
+
+These apply to `/proxy.pac` regardless of `source`.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `source` | string | `remote` | PAC source: `remote` (gfwlist) or `flora` (China IP hash-table) |
+| `minify` | bool | `false` | Strip comments and whitespace from the resulting PAC |
+
+### Flora-specific parameters
 
 | Param | Default | Range | Description |
 |-------|---------|-------|-------------|

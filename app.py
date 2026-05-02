@@ -65,8 +65,24 @@ def _inject_proxy(content: str) -> str:
         new = f"var proxy = '{PAC_PROXY}';\n{content}"
     return new
 
+
+def _minify_js(content: str) -> str:
+    """Minify a PAC JavaScript file.
+
+    - Strips ``//`` line comments (only those at line start, not in strings)
+    - Strips ``/* */`` block comments
+    - Collapses excess blank lines
+    - Removes trailing whitespace
+    """
+    content = re.sub(r"^[ \t]*//[^\n]*", "", content, flags=re.MULTILINE)
+    content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+    content = re.sub(r"\n{3,}", "\n\n", content)
+    content = re.sub(r"[ \t]+$", "", content, flags=re.MULTILINE)
+    return content.strip()
+
+
 # ---------------------------------------------------------------------------
-# Flora PAC provider
+# Data sources
 # ---------------------------------------------------------------------------
 from flora.provider import fetch_and_cache_ip_data, get_pac_content, set_redis as set_flora_redis, is_ready as is_flora_ready
 
@@ -215,6 +231,7 @@ async def proxy_pac(
     source: str = Query("remote", description="PAC source: 'remote' (default) or 'flora'"),
     hash_base: int = Query(3011, ge=1001, le=99999, description="Hash table size for Flora PAC (default: 3011)"),
     mask_step: int = Query(2, ge=1, le=8, description="Network mask fragmentation step for Flora PAC (default: 2)"),
+    minify: bool = Query(False, description="Minify the resulting PAC by stripping comments and whitespace"),
 ):
     if source == "flora":
         if not is_flora_ready():
@@ -226,6 +243,9 @@ async def proxy_pac(
         content = get_pac_content(hash_base, mask_step, PAC_PROXY)
         if content is None:
             return Response(status_code=503, content="Flora PAC unavailable")
+
+        if minify:
+            content = _minify_js(content)
 
         return Response(
             content=content,
@@ -239,8 +259,12 @@ async def proxy_pac(
     if _cached_pac is None:
         return Response(status_code=503, content="No PAC data available")
 
+    content = _inject_proxy(_cached_pac)
+    if minify:
+        content = _minify_js(content)
+
     return Response(
-        content=_inject_proxy(_cached_pac),
+        content=content,
         media_type="application/x-ns-proxy-autoconfig",
     )
 
