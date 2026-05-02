@@ -72,18 +72,9 @@ def _inject_proxy(content: str) -> str:
 
 
 def _minify_js(content: str) -> str:
-    """Minify a PAC JavaScript file.
+    import rjsmin
 
-    - Strips ``//`` line comments (only those at line start, not in strings)
-    - Strips ``/* */`` block comments
-    - Collapses excess blank lines
-    - Removes trailing whitespace
-    """
-    content = re.sub(r"^[ \t]*//[^\n]*", "", content, flags=re.MULTILINE)
-    content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-    content = re.sub(r"\n{3,}", "\n\n", content)
-    content = re.sub(r"[ \t]+$", "", content, flags=re.MULTILINE)
-    return content.strip()
+    return rjsmin.jsmin(content)
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +240,7 @@ async def proxy_pac(
 
         return Response(
             content=content,
-            media_type="application/x-ns-proxy-autoconfig",
+            media_type="text/plain",  # text/plain so browsers display inline instead of downloading; PAC exec engines ignore MIME type
         )
 
     # Default: remote PAC
@@ -265,7 +256,7 @@ async def proxy_pac(
 
     return Response(
         content=content,
-        media_type="application/x-ns-proxy-autoconfig",
+        media_type="text/plain",  # text/plain so browsers display inline instead of downloading; PAC exec engines ignore MIME type
     )
 
 
