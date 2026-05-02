@@ -80,7 +80,7 @@ async def _fetch_remote() -> str | None:
             resp = await client.get(REMOTE_PAC_URL)
             resp.raise_for_status()
             logger.info("Fetched remote PAC (%d bytes)", len(resp.text))
-            return _inject_proxy(resp.text)
+            return resp.text
     except Exception:
         logger.exception("Remote fetch failed")
         return None
@@ -118,7 +118,7 @@ def _load_fallback() -> str | None:
     try:
         content = path.read_text()
         logger.info("Loaded fallback PAC (%d bytes)", len(content))
-        return _inject_proxy(content)
+        return content
     except Exception:
         logger.exception("Fallback load failed")
         return None
@@ -207,7 +207,7 @@ async def proxy_pac():
         return Response(status_code=503, content="No PAC data available")
 
     return Response(
-        content=_cached_pac,
+        content=_inject_proxy(_cached_pac),
         media_type="application/x-ns-proxy-autoconfig",
     )
 
