@@ -30,7 +30,7 @@ WHITELIST_FALLBACK_PATH = os.getenv(
 ).strip()
 
 WHITELIST_CACHE_TTL = int(os.getenv(
-    "WHITELIST_CACHE_TTL", "86400",
+    "WHITELIST_CACHE_TTL", "172800",
 ))
 
 FETCH_PROXY = os.getenv("FETCH_PROXY", "").strip() or None

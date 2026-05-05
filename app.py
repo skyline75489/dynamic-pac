@@ -153,17 +153,18 @@ def _load_fallback() -> str | None:
 async def _seed_cache() -> None:
     global _cached_pac, _cached_at
 
+    # Try Redis first (another replica may have cached it)
+    content = await _read_redis()
+    if content is not None:
+        _cached_pac, _cached_at = content, time.monotonic()
+        logger.info("Cache seeded from Redis")
+        return
+
     content = await _fetch_remote()
     if content is not None:
         _cached_pac, _cached_at = content, time.monotonic()
         await _write_redis(content)
         logger.info("Cache seeded from remote")
-        return
-
-    content = await _read_redis()
-    if content is not None:
-        _cached_pac, _cached_at = content, time.monotonic()
-        logger.info("Cache seeded from Redis")
         return
 
     content = _load_fallback()
@@ -191,17 +192,18 @@ async def _do_refresh() -> None:
     async with _refresh_lock:
         logger.info("Cache refresh started")
 
+        # Try Redis first (another replica may have refreshed)
+        content = await _read_redis()
+        if content is not None:
+            _cached_pac, _cached_at = content, time.monotonic()
+            logger.info("Cache refreshed from Redis")
+            return
+
         content = await _fetch_remote()
         if content is not None:
             _cached_pac, _cached_at = content, time.monotonic()
             await _write_redis(content)
             logger.info("Cache refreshed from remote")
-            return
-
-        content = await _read_redis()
-        if content is not None:
-            _cached_pac, _cached_at = content, time.monotonic()
-            logger.info("Cache refreshed from Redis")
             return
 
         content = _load_fallback()
