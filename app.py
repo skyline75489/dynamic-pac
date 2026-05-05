@@ -39,6 +39,16 @@ logger = logging.getLogger("dynamic-pac")
 from flora.provider import fetch_and_cache_ip_data, get_pac_content, set_redis as set_flora_redis, is_ready as is_flora_ready
 
 # ---------------------------------------------------------------------------
+# Whitelist PAC provider
+# ---------------------------------------------------------------------------
+from whitelist.provider import (  # noqa: E402
+    fetch_and_cache_domain_data,
+    get_pac_content as get_whitelist_pac,
+    set_redis as set_whitelist_redis,
+    is_ready as is_whitelist_ready,
+)
+
+# ---------------------------------------------------------------------------
 # Redis (optional)
 # ---------------------------------------------------------------------------
 _redis = None
@@ -47,6 +57,7 @@ if REDIS_URL:
 
     _redis = aioredis.from_url(REDIS_URL)
     set_flora_redis(_redis)
+    set_whitelist_redis(_redis)
     logger.info("Redis configured: %s", REDIS_URL)
 
 REDIS_CONTENT_KEY = "dynamic-pac:content"
@@ -206,8 +217,9 @@ async def _lifespan(_app: FastAPI):
     # Seed the remote PAC cache
     await _seed_cache()
 
-    # Fetch Flora IP data in background (doesn't block startup)
+    # Fetch Flora IP data and whitelist domains in background
     asyncio.create_task(fetch_and_cache_ip_data())
+    asyncio.create_task(fetch_and_cache_domain_data())
 
     yield
 
@@ -243,6 +255,25 @@ async def proxy_pac(
             media_type="text/plain",  # text/plain so browsers display inline instead of downloading; PAC exec engines ignore MIME type
         )
 
+    if source == "whitelist":
+        if not is_whitelist_ready():
+            return Response(
+                status_code=503,
+                content="Whitelist PAC not yet ready (still fetching domain list)",
+            )
+
+        content = get_whitelist_pac(PAC_PROXY)
+        if content is None:
+            return Response(status_code=503, content="Whitelist PAC unavailable")
+
+        if minify:
+            content = _minify_js(content)
+
+        return Response(
+            content=content,
+            media_type="text/plain",  # text/plain so browsers display inline instead of downloading; PAC exec engines ignore MIME type
+        )
+
     # Default: remote PAC
     if _is_stale():
         _trigger_refresh()
@@ -264,6 +295,7 @@ async def proxy_pac(
 async def health():
     remote_ok = _cached_pac is not None
     flora_ok = is_flora_ready()
+    whitelist_ok = is_whitelist_ready()
 
     if not remote_ok:
         return Response(
@@ -272,12 +304,14 @@ async def health():
                 "status": "degraded",
                 "remote_pac": False,
                 "flora_pac": flora_ok,
+                "whitelist_pac": whitelist_ok,
             },
         )
     return {
         "status": "ok",
         "remote_pac": True,
         "flora_pac": flora_ok,
+        "whitelist_pac": whitelist_ok,
     }
 
 
