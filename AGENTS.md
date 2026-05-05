@@ -17,18 +17,18 @@ Redis → APNIC → local fallback file (`fallback_ip_cn.json`). The expensive A
 ### Whitelist PAC source chain
 Redis → dnsmasq-china-list → local fallback file (`fallback_domains.json`). Fetches a curated list of Chinese domains, serializes as a JSON object in the PAC. Domain matching uses suffix-tree traversal with `hasOwnProperty` for O(1) lookups. `.cn` domains short-circuit to DIRECT without checking the whitelist.
 
-Both sources serve stale data during background refreshes — requests never block.
+All sources serve stale data during background refreshes — requests never block.
 
 ## Endpoints
 
 | Path | Description |
 |------|-------------|
-| `/proxy.pac` | Remote gfwlist PAC with proxy injected |
+| `/proxy.pac` | Default: gfwlist/remote PAC with proxy injected |
 | `/proxy.pac?source=flora` | Flora PAC (China IP hash-table) |
 | `/proxy.pac?source=flora&hash_base=5003&mask_step=1` | Flora PAC with custom hash table size and mask step |
 | `/proxy.pac?source=whitelist` | Whitelist PAC (Chinese domains → DIRECT) |
 | `/proxy.pac?minify=true` | Any source with comments/whitespace stripped (uses rjsmin) |
-| `/health` | Returns 200 with `{remote_pac, flora_pac, whitelist_pac}` status |
+| `/health` | Returns 200 with `{gfwlist_pac, flora_pac, whitelist_pac}` status |
 
 ## Configuration (env vars)
 
@@ -69,6 +69,9 @@ LRU caches up to 32 unique (hash_base, mask_step) combinations.
 
 ```
 ├── app.py                         # FastAPI server
+├── gfwlist/
+│   ├── __init__.py
+│   └── provider.py                # Remote PAC fetch, Redis/fallback caching, proxy injection
 ├── flora/
 │   ├── __init__.py
 │   ├── ip_data.py                 # APNIC fetch + network merging
