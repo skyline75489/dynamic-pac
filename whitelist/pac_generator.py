@@ -184,6 +184,9 @@ function isInDomains(domain_dict, host) {{
     if (suffix === "cn") {{
         return true;
     }}
+    if (host.endsWith(".nip.io") || host.endsWith(".sslip.io") || host.endsWith(".traefik.me")) {{
+        return true;
+    }}
     pos = host.lastIndexOf('.', pos - 1);
     while (true) {{
         if (pos === -1) {{
