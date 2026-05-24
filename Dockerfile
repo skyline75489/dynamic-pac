@@ -1,6 +1,4 @@
-FROM mcr.microsoft.com/azurelinux/base/python:3.12
-
-RUN tdnf update -y && tdnf install -y shadow-utils && tdnf clean all
+FROM python:3.13-slim
 
 WORKDIR /app
 
