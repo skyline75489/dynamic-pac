@@ -70,7 +70,7 @@ sleep 3
 JOB_STATUS="$(kubectl get job -n dynamic-pac "${JOB_NAME}" -o jsonpath='{.status.conditions[0].type}' 2>/dev/null || echo 'Unknown')"
 echo "==> Job status: ${JOB_STATUS}"
 
-if [ "${JOB_STATUS}" = "Complete" ]; then
+if echo "${JOB_STATUS}" | grep -qiE "Complete|Success"; then
   echo "==> Verifying image in zot:"
   curl -sI "http://192.168.1.206:5000/v2/skyline/dynamic-pac/manifests/${SHORT_SHA}" | head -3
   echo ""

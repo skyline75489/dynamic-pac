@@ -41,15 +41,10 @@ spec:
             - --destination=192.168.1.206:5000/skyline/dynamic-pac:SHORT_SHA
             - --destination=192.168.1.206:5000/skyline/dynamic-pac:latest
             - --insecure
+            - --insecure-pull
             - --skip-tls-verify
             - --cache=false
-          env:
-            - name: HTTP_PROXY
-              value: "http://naiveproxy-http.naiveproxy:1081"
-            - name: HTTPS_PROXY
-              value: "http://naiveproxy-http.naiveproxy:1081"
-            - name: NO_PROXY
-              value: "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local,localhost,192.168.1.206"
+            - --registry-map=index.docker.io=192.168.1.206:5000
           volumeMounts:
             - name: workspace
               mountPath: /workspace
