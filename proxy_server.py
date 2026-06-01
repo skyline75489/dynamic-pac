@@ -259,7 +259,11 @@ def _resolves_to_private(host: str) -> bool | None:
         addrs = socket.getaddrinfo(hostname, None)
         for family, _, _, _, sockaddr in addrs:
             ip = sockaddr[0]
-            if _is_private_ip(ip):
+            # Only check IPv4 for private range; Python's ipaddress marks
+            # some non-private IPv6 ranges (e.g. 2001::/23 for TEREDO) as
+            # private, which would falsely classify hosts like google.com
+            # as internal.
+            if family == socket.AF_INET and _is_private_ip(ip):
                 _dns_cache[hostname] = True
                 return True
         _dns_cache[hostname] = False
