@@ -131,6 +131,10 @@ def get_rules() -> dict | None:
 
     Returns {"rules": [[...], [...]], "proxy": "..."} or None
     if the cache hasn't been seeded yet.
+
+    The proxy string is taken from PAC_PROXY env var (the serving-time
+    injected value) rather than the cached PAC's placeholder, because
+    the cached PAC may have a default/placeholder proxy like 127.0.0.1:1080.
     """
     if _cached_pac is None:
         return None
@@ -146,9 +150,12 @@ def get_rules() -> dict | None:
         logger.warning("Failed to parse rules JSON: %s", e)
         return None
 
-    # Also parse the proxy string (injected at serving time)
-    proxy_match = _PROXY_RE.search(_cached_pac)
-    proxy = proxy_match.group(0) if proxy_match else "PROXY __unknown__"
+    # Use the env-configured proxy (the real one injected at serving time)
+    # Fall back to parsing from the cached PAC as a best-effort.
+    proxy = os.getenv("PAC_PROXY", "").strip()
+    if not proxy:
+        proxy_match = _PROXY_RE.search(_cached_pac)
+        proxy = proxy_match.group(0) if proxy_match else "PROXY __unknown__"
 
     return {"rules": rules, "proxy": proxy}
 
