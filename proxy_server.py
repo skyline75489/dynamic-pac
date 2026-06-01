@@ -141,6 +141,7 @@ def refresh_rules() -> bool:
     _upstream = _parse_proxy_config(proxy_str)
     _direct_set = direct
     _proxy_set = proxy
+    _clear_dns_cache()
     _rules_loaded = True
 
     logger.info(
@@ -187,8 +188,25 @@ def _is_always_direct(host: str) -> bool:
 
 # ── Host matching ──────────────────────────────────────────────────────────
 
+def _is_private_ip(host: str) -> bool:
+    """Check if host is a bare IP address in a private range."""
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(str(host))
+        return addr.is_private
+    except ValueError:
+        return False
+
+
 def get_route(host: str) -> str | None:
     """Determine routing for a host.
+
+    Routing priority:
+    1. Internal/local domain suffix → always DIRECT
+    2. Private IP address → always DIRECT
+    3. In the configured direct set → DIRECT
+    4. In the configured proxy set → PROXY
+    5. Default route (configurable: DIRECT or PROXY depending on mode)
 
     Returns 'DIRECT' or 'PROXY', or None if rules aren't loaded yet.
     """
@@ -199,12 +217,62 @@ def get_route(host: str) -> str | None:
     if _is_always_direct(host):
         return "DIRECT"
 
+    # Private IP addresses always go DIRECT
+    if _is_private_ip(host):
+        return "DIRECT"
+
     if _match_domain(host, _direct_set):
         return "DIRECT"
     if _proxy_set and _match_domain(host, _proxy_set):
         return "PROXY"
+
+    # For hostnames not in any list, try DNS resolution once per refresh
+    # If it resolves to a private IP, treat as DIRECT (handles k8s internal)
+    if _resolves_to_private(host):
+        return "DIRECT"
+
     return _default_route
 
+
+_dns_cache: dict[str, bool | None] = {}
+
+
+def _resolves_to_private(host: str) -> bool | None:
+    """Check if hostname resolves to a private IP address.
+
+    Returns True/False, or None if resolution failed (treat as proxy).
+    Results are cached per refresh cycle.
+    """
+    # Strip port if present (shouldn't happen but be safe)
+    hostname = host.split(":")[0].lower()
+
+    # Skip bare IPs (already handled above)
+    if _is_private_ip(hostname):
+        return True
+
+    cached = _dns_cache.get(hostname)
+    if cached is not None:
+        return cached
+
+    try:
+        import socket
+        addrs = socket.getaddrinfo(hostname, None)
+        for family, _, _, _, sockaddr in addrs:
+            ip = sockaddr[0]
+            if _is_private_ip(ip):
+                _dns_cache[hostname] = True
+                return True
+        _dns_cache[hostname] = False
+        return False
+    except (OSError, socket.gaierror):
+        # Resolution failure may mean non-existent host on this network
+        # Let the default route handle it
+        _dns_cache[hostname] = None
+        return None
+
+
+def _clear_dns_cache() -> None:
+    _dns_cache.clear()
 
 def _match_domain(host: str, domain_set: set[str]) -> bool:
     """Check if host matches any domain in domain_set (exact or subdomain)."""
