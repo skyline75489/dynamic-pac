@@ -259,6 +259,20 @@ async def get_rules(
     }
 
 
+@app.get("/debug/proxy")
+async def debug_proxy():
+    """Debug endpoint to inspect proxy server state."""
+    return {
+        "upstream_host": proxy_server._upstream.get("socks5", (None, None))[0],
+        "upstream_port": proxy_server._upstream.get("socks5", (None, None))[1],
+        "rules_loaded": proxy_server._rules_loaded,
+        "whitelist_count": len(proxy_server._whitelist),
+        "blocklist_count": len(proxy_server._blocklist),
+        "route_google": proxy_server.get_route("google.com"),
+        "route_ha": proxy_server.get_route("homeassistant.homeassistant"),
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
 
