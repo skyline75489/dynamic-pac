@@ -150,6 +150,41 @@ def refresh_rules() -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Hardcoded internal/local domains — always DIRECT regardless of mode
+# ---------------------------------------------------------------------------
+_ALWAYS_DIRECT = frozenset({
+    # Kubernetes internal
+    "svc", "svc.cluster.local",
+    # mDNS / local network
+    "local", "localhost",
+    # RFC 1918 reverse lookup
+    "10.in-addr.arpa", "16.172.in-addr.arpa",
+    "17.172.in-addr.arpa", "18.172.in-addr.arpa",
+    "19.172.in-addr.arpa", "20.172.in-addr.arpa",
+    "21.172.in-addr.arpa", "22.172.in-addr.arpa",
+    "23.172.in-addr.arpa", "24.172.in-addr.arpa",
+    "25.172.in-addr.arpa", "26.172.in-addr.arpa",
+    "27.172.in-addr.arpa", "28.172.in-addr.arpa",
+    "29.172.in-addr.arpa", "30.172.in-addr.arpa",
+    "31.172.in-addr.arpa", "168.192.in-addr.arpa",
+    # HomeAssistant internal
+    "homeassistant.local",
+})
+
+
+def _is_always_direct(host: str) -> bool:
+    """Check if host should always go DIRECT (internal/local domains)."""
+    host_lower = host.lower()
+    if host_lower in _ALWAYS_DIRECT:
+        return True
+    # Check suffix matching for wildcard internal domains
+    for suffix in (".svc", ".svc.cluster.local", ".local", ".internal"):
+        if host_lower.endswith(suffix):
+            return True
+    return False
+
+
 # ── Host matching ──────────────────────────────────────────────────────────
 
 def get_route(host: str) -> str | None:
@@ -159,6 +194,10 @@ def get_route(host: str) -> str | None:
     """
     if not _rules_loaded:
         return None
+
+    # Internal/local domains always go DIRECT
+    if _is_always_direct(host):
+        return "DIRECT"
 
     if _match_domain(host, _direct_set):
         return "DIRECT"
