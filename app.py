@@ -18,6 +18,7 @@ LISTEN_HOST = os.getenv("LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", "8080"))
 PROXY_PORT = int(os.getenv("PROXY_PORT", "8888"))
 PAC_PROXY = os.getenv("PAC_PROXY", "").strip()
+PROXY_MODE = os.getenv("PROXY_MODE", "gfwlist").strip().lower()
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 
 if not PAC_PROXY:
@@ -92,6 +93,27 @@ async def _lifespan(_app: FastAPI):
     # Fetch Flora IP data and whitelist domains in background
     asyncio.create_task(fetch_and_cache_ip_data())
     asyncio.create_task(fetch_and_cache_domain_data())
+
+    # Configure the proxy server's routing mode
+    if PROXY_MODE == "whitelist":
+        # Chinese domains → DIRECT, everything else → PROXY
+        proxy_server.configure(
+            get_direct_domains=lambda: (
+                set(d) if (d := get_whitelist_domains()) is not None else None
+            ),
+            get_proxy_domains=None,
+            default_route="PROXY",
+        )
+        logger.info("Proxy mode: whitelist (Chinese domains direct, rest proxy)")
+    else:
+        # GFWList mode: whitelisted domains → DIRECT, blocklisted → PROXY,
+        # unknown → DIRECT
+        proxy_server.configure(
+            get_direct_domains=proxy_server.get_gfwlist_direct_domains,
+            get_proxy_domains=proxy_server.get_gfwlist_proxy_domains,
+            default_route="DIRECT",
+        )
+        logger.info("Proxy mode: gfwlist (whitelist direct, blocklist proxy)")
 
     # Start the CONNECT proxy server
     proxy_ready = asyncio.Event()
@@ -266,8 +288,9 @@ async def debug_proxy():
         "upstream_host": proxy_server._upstream.get("socks5", (None, None))[0],
         "upstream_port": proxy_server._upstream.get("socks5", (None, None))[1],
         "rules_loaded": proxy_server._rules_loaded,
-        "whitelist_count": len(proxy_server._whitelist),
-        "blocklist_count": len(proxy_server._blocklist),
+        "direct_count": len(proxy_server._direct_set),
+        "proxy_count": len(proxy_server._proxy_set),
+        "default_route": proxy_server._default_route,
         "route_google": proxy_server.get_route("google.com"),
         "route_ha": proxy_server.get_route("homeassistant.homeassistant"),
     }

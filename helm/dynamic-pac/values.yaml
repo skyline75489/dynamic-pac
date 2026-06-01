@@ -39,6 +39,9 @@ proxy:
   enabled: false
   port: 8888
 
+# Routing mode for the CONNECT proxy: "gfwlist" (default) or "whitelist"
+proxyMode: ""
+
 resources:
   requests:
     cpu: 10m

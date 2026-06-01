@@ -24,9 +24,9 @@ spec:
               git clone --depth=1 git@soft-serve.soft-serve.svc:dynamic-pac /workspace
           env:
             - name: HTTP_PROXY
-              value: "http://naiveproxy-http.naiveproxy:1081"
+              value: "http://dynamic-pac.dynamic-pac:8888"
             - name: HTTPS_PROXY
-              value: "http://naiveproxy-http.naiveproxy:1081"
+              value: "http://dynamic-pac.dynamic-pac:8888"
             - name: NO_PROXY
               value: "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local,localhost"
           volumeMounts:

@@ -1,15 +1,22 @@
 """
 HTTP CONNECT proxy for dynamic-pac.
 
-Parses PAC rules and routes connections through SOCKS5/HTTP upstream
-or directly based on domain matching.
+Routes connections through SOCKS5/HTTP upstream or directly based on
+domain matching. Supports two modes:
 
-Started as a separate TCP server alongside the FastAPI app.
+- gfwlist (default): uses GFWList rules — whitelisted domains → DIRECT,
+  blocklisted → PROXY, unknown → DIRECT.
+- whitelist: uses dnsmasq-china-list — known Chinese domains → DIRECT,
+  everything else → PROXY.
+
+Mode is configured at startup by app.py via configure().
 """
 
 import asyncio
 import logging
+import os
 import re
+from collections.abc import Callable
 
 from gfwlist.provider import get_rules
 
@@ -20,13 +27,81 @@ _SOCKS_RE = re.compile(r"SOCKS5?\s+([^:\s]+):(\d+)", re.I)
 _HTTP_RE = re.compile(r"PROXY\s+([^:\s]+):(\d+)", re.I)
 
 # ---------------------------------------------------------------------------
+# Configurable data sources (set by app.py at startup)
+# ---------------------------------------------------------------------------
+# Callable returning a set of domains that should go DIRECT, or None if not ready
+_get_direct_domains: Callable[[], set[str] | None] | None = None
+# Callable returning a set of domains that should go PROXY, or None if not ready
+_get_proxy_domains: Callable[[], set[str] | None] | None = None
+# Default route for domains that don't match either set
+_default_route: str = "DIRECT"
+
+# ---------------------------------------------------------------------------
 # Cached routing state
 # ---------------------------------------------------------------------------
-_whitelist: set[str] = set()
-_blocklist: set[str] = set()
+_direct_set: set[str] = set()
+_proxy_set: set[str] = set()
 _upstream: dict[str, tuple[str, int]] = {}  # {"socks5": (host, port), "http": ...}
 _rules_loaded = False
 
+
+def configure(
+        get_direct_domains: Callable[[], set[str] | None],
+        get_proxy_domains: Callable[[], set[str] | None] | None = None,
+        default_route: str = "DIRECT",
+) -> None:
+    """Configure the proxy server's domain data sources.
+
+    Args:
+        get_direct_domains: returns domains that should go DIRECT
+        get_proxy_domains: optional, returns domains that should go PROXY
+        default_route: fallback for unmatched domains ("DIRECT" or "PROXY")
+    """
+    global _get_direct_domains, _get_proxy_domains, _default_route
+    _get_direct_domains = get_direct_domains
+    _get_proxy_domains = get_proxy_domains
+    _default_route = default_route
+
+
+# ── GFWList source helpers (used by app.py in gfwlist mode) ────────────────
+
+def _build_domain_sets(rules: list) -> tuple[set[str], set[str]]:
+    """Build direct and proxy sets from a parsed GFWList rules array.
+
+    In the PAC: rules[tier][sub_idx] where sub_idx % 2 == 0 → DIRECT,
+    sub_idx % 2 == 1 → PROXY.
+    """
+    direct: set[str] = set()
+    proxy: set[str] = set()
+    for tier in rules:
+        for sub_idx, sublist in enumerate(tier):
+            for domain in sublist:
+                if sub_idx % 2 == 0:
+                    direct.add(domain)
+                else:
+                    proxy.add(domain)
+    return direct, proxy
+
+
+def get_gfwlist_direct_domains() -> set[str] | None:
+    """Return the GFWList whitelist (DIRECT) domains."""
+    data = get_rules()
+    if data is None:
+        return None
+    direct, _ = _build_domain_sets(data["rules"])
+    return direct
+
+
+def get_gfwlist_proxy_domains() -> set[str] | None:
+    """Return the GFWList blocklist (PROXY) domains."""
+    data = get_rules()
+    if data is None:
+        return None
+    _, proxy = _build_domain_sets(data["rules"])
+    return proxy
+
+
+# ── Proxy config parsing ──────────────────────────────────────────────────
 
 def _parse_proxy_config(proxy_str: str) -> dict[str, tuple[str, int]]:
     """Extract upstream proxies from a PAC proxy string."""
@@ -40,46 +115,37 @@ def _parse_proxy_config(proxy_str: str) -> dict[str, tuple[str, int]]:
     return result
 
 
-def _build_domain_sets(rules: list) -> tuple[set[str], set[str]]:
-    """Build whitelist and blocklist sets from a parsed PAC rules array.
-
-    In the PAC: rules[tier][sub_idx] where sub_idx % 2 == 0 → DIRECT,
-    sub_idx % 2 == 1 → PROXY.
-    """
-    whitelist: set[str] = set()
-    blocklist: set[str] = set()
-    for tier in rules:
-        for sub_idx, sublist in enumerate(tier):
-            for domain in sublist:
-                if sub_idx % 2 == 0:
-                    whitelist.add(domain)
-                else:
-                    blocklist.add(domain)
-    return whitelist, blocklist
-
-
 def refresh_rules() -> bool:
-    """Fetch latest rules from the gfwlist provider and rebuild routing state.
+    """Fetch latest domain data from configured sources and rebuild state.
 
-    Returns True if rules were updated, False if not yet available.
+    Returns True if rules were updated, False if the data source is not
+    yet available.
     """
-    global _whitelist, _blocklist, _upstream, _rules_loaded
+    global _direct_set, _proxy_set, _upstream, _rules_loaded
 
-    data = get_rules()
-    if data is None:
+    if _get_direct_domains is None:
         return False
 
-    whitelist, blocklist = _build_domain_sets(data["rules"])
-    upstream = _parse_proxy_config(data["proxy"])
+    direct = _get_direct_domains()
+    if direct is None:
+        return False
 
-    _whitelist = whitelist
-    _blocklist = blocklist
-    _upstream = upstream
+    proxy: set[str] = set()
+    if _get_proxy_domains is not None:
+        p = _get_proxy_domains()
+        if p is not None:
+            proxy = p
+
+    # Parse upstream from PAC_PROXY env var (always the live injected value)
+    proxy_str = os.getenv("PAC_PROXY", "").strip()
+    _upstream = _parse_proxy_config(proxy_str)
+    _direct_set = direct
+    _proxy_set = proxy
     _rules_loaded = True
 
     logger.info(
-        "Rules refreshed: %d whitelist, %d blocklist entries, %d upstream proxies",
-        len(whitelist), len(blocklist), len(upstream),
+        "Rules refreshed: %d direct, %d proxy entries, %d upstreams, default=%s",
+        len(direct), len(proxy), len(_upstream), _default_route,
     )
     return True
 
@@ -94,12 +160,11 @@ def get_route(host: str) -> str | None:
     if not _rules_loaded:
         return None
 
-    if _match_domain(host, _whitelist):
+    if _match_domain(host, _direct_set):
         return "DIRECT"
-    if _match_domain(host, _blocklist):
+    if _proxy_set and _match_domain(host, _proxy_set):
         return "PROXY"
-    # Default: DIRECT (anything not in any list goes direct)
-    return "DIRECT"
+    return _default_route
 
 
 def _match_domain(host: str, domain_set: set[str]) -> bool:
@@ -346,8 +411,8 @@ async def start(host: str = "0.0.0.0",
     if ready_event is not None:
         ready_event.set()
 
-    logger.info("CONNECT proxy listening on %s:%d (%d whitelist, %d blocklist)",
-                host, port, len(_whitelist), len(_blocklist))
+    logger.info("CONNECT proxy listening on %s:%d (%d direct, %d proxy, default=%s)",
+                host, port, len(_direct_set), len(_proxy_set), _default_route)
 
     async with server:
         await server.serve_forever()
