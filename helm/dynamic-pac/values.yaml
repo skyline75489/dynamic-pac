@@ -35,6 +35,10 @@ service:
   type: ClusterIP
   port: 8080
 
+proxy:
+  enabled: false
+  port: 8888
+
 resources:
   requests:
     cpu: 10m

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -15,6 +16,7 @@ logging.basicConfig(
 # ---------------------------------------------------------------------------
 LISTEN_HOST = os.getenv("LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", "8080"))
+PROXY_PORT = int(os.getenv("PROXY_PORT", "8888"))
 PAC_PROXY = os.getenv("PAC_PROXY", "").strip()
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 
@@ -29,6 +31,7 @@ logger = logging.getLogger("dynamic-pac.main")
 from gfwlist.provider import (  # noqa: E402
     seed_cache,
     get_pac_content as get_gfwlist_pac,
+    get_rules as get_gfwlist_rules,
     set_redis as set_gfwlist_redis,
     is_ready as is_gfwlist_ready,
 )
@@ -49,9 +52,15 @@ from flora.provider import (  # noqa: E402
 from whitelist.provider import (  # noqa: E402
     fetch_and_cache_domain_data,
     get_pac_content as get_whitelist_pac,
+    get_domains as get_whitelist_domains,
     set_redis as set_whitelist_redis,
     is_ready as is_whitelist_ready,
 )
+
+# ---------------------------------------------------------------------------
+# Proxy server
+# ---------------------------------------------------------------------------
+import proxy_server  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Redis (optional)
@@ -84,7 +93,27 @@ async def _lifespan(_app: FastAPI):
     asyncio.create_task(fetch_and_cache_ip_data())
     asyncio.create_task(fetch_and_cache_domain_data())
 
+    # Start the CONNECT proxy server
+    proxy_ready = asyncio.Event()
+    proxy_task = asyncio.create_task(
+        proxy_server.start(
+            host="0.0.0.0",
+            port=PROXY_PORT,
+            ready_event=proxy_ready,
+        ),
+    )
+    await proxy_ready.wait()
+
+    logger.info("CONNECT proxy ready on port %d", PROXY_PORT)
+
     yield
+
+    # Shutdown: cancel proxy task
+    proxy_task.cancel()
+    try:
+        await proxy_task
+    except asyncio.CancelledError:
+        pass
 
     if _redis is not None:
         await _redis.aclose()
@@ -178,6 +207,55 @@ async def health():
         "gfwlist_pac": True,
         "flora_pac": flora_ok,
         "whitelist_pac": whitelist_ok,
+    }
+
+
+@app.get("/rules.json")
+async def get_rules(
+    source: str = Query(
+        "remote",
+        description="Rule source: 'remote' (gfwlist), 'whitelist' (Chinese domains), or 'flora' (China IPs)",
+    ),
+):
+    if source == "whitelist":
+        domains = get_whitelist_domains()
+        if domains is None:
+            return Response(
+                status_code=503,
+                content={"error": "Whitelist data not yet ready"},
+            )
+        return {
+            "source": "whitelist",
+            "proxy": PAC_PROXY,
+            "direct_domains": domains,
+            "type": "whitelist",
+        }
+
+    if source == "flora":
+        # Flora uses IP ranges, not domains — return a placeholder for now
+        return {
+            "source": "flora",
+            "proxy": PAC_PROXY,
+            "type": "ip_range",
+            "note": "Flora uses China IP ranges, not domain lists",
+        }
+
+    # Default: remote/gfwlist
+    data = get_gfwlist_rules()
+    if data is None:
+        return Response(
+            status_code=503,
+            content={"error": "Remote PAC rules not yet ready"},
+        )
+
+    # Normalize the proxy string to just the routing part
+    proxy_val = PAC_PROXY or data["proxy"]
+
+    return {
+        "source": "remote",
+        "proxy": proxy_val,
+        "rules": data["rules"],
+        "type": "gfwlist",
     }
 
 

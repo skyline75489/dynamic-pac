@@ -297,3 +297,8 @@ def _trigger_refresh() -> None:
 
 def is_ready() -> bool:
     return _cached_domains is not None
+
+
+def get_domains() -> list[str] | None:
+    """Return the cached whitelist domains, or None if not yet fetched."""
+    return _cached_domains

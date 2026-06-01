@@ -9,6 +9,7 @@ Two-phase design with Redis-backed caching:
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -117,6 +118,39 @@ def _load_fallback() -> str | None:
     except Exception:
         logger.exception("Fallback load failed")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Rules extraction
+# ---------------------------------------------------------------------------
+_RULES_RE = re.compile(r"var rules = (\[.*?\]);\s*\n\s*var lastRule", re.DOTALL)
+
+
+def get_rules() -> dict | None:
+    """Return parsed rules + proxy from the cached PAC.
+
+    Returns {"rules": [[...], [...]], "proxy": "..."} or None
+    if the cache hasn't been seeded yet.
+    """
+    if _cached_pac is None:
+        return None
+
+    match = _RULES_RE.search(_cached_pac)
+    if not match:
+        logger.warning("Could not extract rules from cached PAC")
+        return None
+
+    try:
+        rules = json.loads(match.group(1))
+    except json.JSONDecodeError as e:
+        logger.warning("Failed to parse rules JSON: %s", e)
+        return None
+
+    # Also parse the proxy string (injected at serving time)
+    proxy_match = _PROXY_RE.search(_cached_pac)
+    proxy = proxy_match.group(0) if proxy_match else "PROXY __unknown__"
+
+    return {"rules": rules, "proxy": proxy}
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,11 @@ spec:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+            {{- if .Values.proxy.enabled }}
+            - name: proxy
+              containerPort: {{ .Values.proxy.port }}
+              protocol: TCP
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ include "dynamic-pac.fullname" . }}

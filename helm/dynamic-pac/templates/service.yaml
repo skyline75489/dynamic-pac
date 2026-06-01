@@ -11,5 +11,11 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+    {{- if .Values.proxy.enabled }}
+    - port: {{ .Values.proxy.port }}
+      targetPort: proxy
+      protocol: TCP
+      name: proxy
+    {{- end }}
   selector:
     {{- include "dynamic-pac.selectorLabels" . | nindent 4 }}
