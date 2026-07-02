@@ -379,32 +379,11 @@ async def _direct_connect(
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Connect directly to host:port, preferring IPv4 over IPv6.
 
-    Some proxy hosts lack IPv6 routing.  asyncio.open_connection schedules
-    Happy Eyeballs but may try IPv6 first, which fails with ENETUNREACH.
-    We resolve and try IPv4 addresses before attempting IPv6.
+    The server host has no IPv6 route, so constrain to AF_INET to avoid
+    ENETUNREACH from Happy Eyeballs trying AAAA records first.
     """
     import socket
-
-    infos = await asyncio.getaddrinfo(
-        host, port, type=socket.SOCK_STREAM,
-    )
-    # Prefer IPv4 (AF_INET=2) over IPv6 (AF_INET6=23)
-    infos.sort(key=lambda info: info[0])
-
-    last_err: Exception | None = None
-    for family, type_, proto, _canonname, sockaddr in infos:
-        try:
-            reader, writer = await asyncio.open_connection(
-                sockaddr[0], sockaddr[1],
-                family=family,
-                proto=proto,
-            )
-            return reader, writer
-        except (OSError, ConnectionError) as e:
-            last_err = e
-            continue
-
-    raise last_err or ConnectionError(f"Could not connect to {host}:{port}")
+    return await asyncio.open_connection(host, port, family=socket.AF_INET)
 
 
 # ── Data piping ────────────────────────────────────────────────────────────
