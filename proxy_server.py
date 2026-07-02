@@ -204,9 +204,10 @@ def get_route(host: str) -> str | None:
     Routing priority:
     1. Internal/local domain suffix → always DIRECT
     2. Private IP address → always DIRECT
-    3. In the configured direct set → DIRECT
-    4. In the configured proxy set → PROXY
-    5. Default route (configurable: DIRECT or PROXY depending on mode)
+    3. `.cn` TLD → DIRECT (matches whitelist PAC behavior)
+    4. In the configured direct set → DIRECT
+    5. In the configured proxy set → PROXY
+    6. Default route (configurable: DIRECT or PROXY depending on mode)
 
     Returns 'DIRECT' or 'PROXY', or None if rules aren't loaded yet.
     """
@@ -219,6 +220,11 @@ def get_route(host: str) -> str | None:
 
     # Private IP addresses always go DIRECT
     if _is_private_ip(host):
+        return "DIRECT"
+
+    # .cn TLD short-circuit: matches the whitelist PAC JS behavior.
+    # This catches Chinese domains not in the curated whitelist.
+    if host.lower().endswith(".cn"):
         return "DIRECT"
 
     if _match_domain(host, _direct_set):
@@ -279,11 +285,16 @@ def _clear_dns_cache() -> None:
     _dns_cache.clear()
 
 def _match_domain(host: str, domain_set: set[str]) -> bool:
-    """Check if host matches any domain in domain_set (exact or subdomain)."""
-    if host in domain_set:
+    """Check if host matches any domain in domain_set (exact or subdomain).
+
+    Domain matching is case-insensitive — HTTP hostnames are case-insensitive
+    per RFC 3986, but clients may send CONNECT targets with mixed case.
+    """
+    host_lower = host.lower()
+    if host_lower in domain_set:
         return True
     for domain in domain_set:
-        if host.endswith("." + domain):
+        if host_lower.endswith("." + domain):
             return True
     return False
 
