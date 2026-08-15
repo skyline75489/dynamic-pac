@@ -1,6 +1,11 @@
 # Dynamic PAC Server
 
-A FastAPI server that serves PAC (Proxy Auto-Config) files with three sources:
+A FastAPI server with two roles:
+
+1. **PAC file server** — serves Proxy Auto-Config files with three sources.
+2. **Local HTTP CONNECT proxy** — runs alongside the PAC server on a separate port, applying the same routing rules to plain HTTPS traffic from clients that don't use PAC (CLI tools, Docker containers, etc.).
+
+## PAC sources
 
 - **Remote PAC** (default): fetches a remote gfwlist-style PAC, injects the proxy at serving time
 - **Flora PAC** (`?source=flora`): generates a hash-table-based PAC from China IP ranges (China IPs → DIRECT, rest → proxy)
@@ -19,6 +24,17 @@ Redis → dnsmasq-china-list → local fallback file (`fallback_domains.json`). 
 
 All sources serve stale data during background refreshes — requests never block.
 
+### CONNECT proxy (`proxy_server.py`)
+A standalone asyncio HTTP CONNECT proxy that runs as a sibling task to FastAPI. On each `CONNECT host:port` request, it does suffix matching against the same domain sets the PAC uses, then either:
+- **DIRECT** — opens a raw TCP tunnel to the destination
+- **PROXY** — tunnels through an upstream SOCKS5 or HTTP proxy extracted from the `PAC_PROXY` string
+
+Mode is selected at startup by `PROXY_MODE`:
+- `gfwlist` (default) — whitelist→DIRECT, blocklist→PROXY, unknown→DIRECT. Uses GFWList rules.
+- `whitelist` — known Chinese domains→DIRECT, everything else→PROXY. Uses the dnsmasq-china-list.
+
+Domain sets are obtained via callbacks (`get_direct_domains`, `get_proxy_domains`) configured by `app.py` from the appropriate provider.
+
 ## Endpoints
 
 | Path | Description |
@@ -28,24 +44,30 @@ All sources serve stale data during background refreshes — requests never bloc
 | `/proxy.pac?source=flora&hash_base=5003&mask_step=1` | Flora PAC with custom hash table size and mask step |
 | `/proxy.pac?source=whitelist` | Whitelist PAC (Chinese domains → DIRECT) |
 | `/proxy.pac?minify=true` | Any source with comments/whitespace stripped (uses rjsmin) |
-| `/health` | Returns 200 with `{gfwlist_pac, flora_pac, whitelist_pac}` status |
+| `/health` | Returns 200 with `{gfwlist_pac, flora_pac, whitelist_pac}` status; 503 if the default (gfwlist) source is not ready |
+| `/rules.json` | Machine-readable rules — `{source, proxy, rules}` for gfwlist, `{direct_domains}` for whitelist, placeholder for flora |
+| `/debug/proxy` | Debug snapshot of the CONNECT proxy: upstream targets, rule counts, sample route lookups |
+
+The CONNECT proxy itself does not expose an HTTP endpoint; clients point at `LISTEN_HOST:PROXY_PORT` (default `8888`).
 
 ## Configuration (env vars)
 
 | Variable | Required | Default | Notes |
 |----------|----------|---------|-------|
-| `PAC_PROXY` | yes | — | Injected at serving time (immediate working). e.g. `SOCKS5 1.2.3.4:1080; SOCKS 1.2.3.4:1080; PROXY 1.2.3.4:8080; DIRECT;` |
+| `PAC_PROXY` | yes | — | Injected at serving time (immediate working). e.g. `SOCKS5 1.2.3.4:1080; SOCKS 1.2.3.4:1080; PROXY 1.2.3.4:8080; DIRECT;`. Also parsed by the CONNECT proxy for upstream SOCKS5/HTTP targets. |
 | `REMOTE_PAC_URL` | yes | — | URL to fetch the upstream remote PAC from |
-| `LISTEN_HOST` | no | `0.0.0.0` | |
-| `LISTEN_PORT` | no | `8080` | |
+| `LISTEN_HOST` | no | `0.0.0.0` | FastAPI listen address |
+| `LISTEN_PORT` | no | `8080` | FastAPI listen port |
+| `PROXY_PORT` | no | `8888` | CONNECT proxy listen port |
+| `PROXY_MODE` | no | `gfwlist` | CONNECT proxy routing mode: `gfwlist` or `whitelist` |
 | `FETCH_PROXY` | no | — | Proxy for fetching remote PAC URL and APNIC data |
 | `GFWLIST_CACHE_TTL` | no | `86400` | Seconds before remote PAC cache is stale |
-| `REDIS_URL` | no | — | Redis for durable caching (used by both remote and Flora) |
+| `REDIS_URL` | no | — | Redis for durable caching (used by all three sources) |
 | `FALLBACK_PAC_PATH` | no | `fallback.pac` | Local file when remote + Redis are unavailable |
 | `FLORA_FALLBACK_PATH` | no | `fallback_ip_cn.json` | Local file for China IP data when APNIC + Redis fail |
 | `FLORA_CACHE_TTL` | no | `604800` | Seconds before Flora IP data cache is stale (7 days) |
 | `WHITELIST_FALLBACK_PATH` | no | `fallback_domains.json` | Local file for domain list when remote + Redis fail |
-| `WHITELIST_CACHE_TTL` | no | `86400` | Seconds before whitelist domain cache is stale |
+| `WHITELIST_CACHE_TTL` | no | `172800` | Seconds before whitelist domain cache is stale (2 days) |
 
 ## Query parameters
 
@@ -68,10 +90,11 @@ LRU caches up to 32 unique (hash_base, mask_step) combinations.
 ## Project structure
 
 ```
-├── app.py                         # FastAPI server
+├── app.py                         # FastAPI server + lifespan wiring for proxy_server
+├── proxy_server.py                # HTTP CONNECT proxy (asyncio, suffix-matched routing)
 ├── gfwlist/
 │   ├── __init__.py
-│   └── provider.py                # Remote PAC fetch, Redis/fallback caching, proxy injection
+│   └── provider.py                # Remote PAC fetch, Redis/fallback caching, proxy injection, rule extraction
 ├── flora/
 │   ├── __init__.py
 │   ├── ip_data.py                 # APNIC fetch + network merging
@@ -87,6 +110,7 @@ LRU caches up to 32 unique (hash_base, mask_step) combinations.
 ├── fallback_ip_cn.json            # China IP data offline fallback
 ├── fallback_domains.json          # Domain whitelist offline fallback
 ├── Dockerfile
+├── kaniko-build.sh / kaniko-build.yaml  # Kaniko image build
 ├── requirements.txt
 └── helm/dynamic-pac/              # Helm chart (templates + values)
 ```
@@ -103,6 +127,8 @@ The whitelist PAC uses a suffix-tree approach for domain matching:
 
 The domain list comes from [felixonmars/dnsmasq-china-list](https://github.com/felixonmars/dnsmasq-china-list), the same source used by the original [gfw_domain_whitelist](https://github.com/R0uter/gfw_domain_whitelist) project.
 
+The CONNECT proxy applies the same suffix-stripping logic to the `Host:` of each CONNECT request.
+
 Unlike Flora (which needs `hash_base`/`mask_step`), the whitelist source has no extra query parameters — just `?source=whitelist` and optionally `&minify=true`.
 
 ## Proxy fallback (Android compatibility)
@@ -113,9 +139,11 @@ PAC clients skip proxy types they don't support. To support both desktop (SOCKS5
 SOCKS5 1.2.3.4:1080; SOCKS 1.2.3.4:1080; PROXY 1.2.3.4:8080; DIRECT;
 ```
 
+The CONNECT proxy also parses this string to discover its upstream SOCKS5 and HTTP targets.
+
 ## Docker
 
-Uses `mcr.microsoft.com/azurelinux/base/python:3.12`. Exposes port 8080, runs as non-root `appuser`.
+Uses `mcr.microsoft.com/azurelinux/base/python:3.12`. Exposes ports 8080 (FastAPI) and 8888 (CONNECT proxy), runs as non-root `appuser`.
 
 ## Helm
 
