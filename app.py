@@ -291,8 +291,10 @@ async def debug_proxy():
         "direct_count": len(proxy_server._direct_set),
         "proxy_count": len(proxy_server._proxy_set),
         "default_route": proxy_server._default_route,
-        "route_google": proxy_server.get_route("google.com"),
-        "route_ha": proxy_server.get_route("homeassistant.homeassistant"),
+        "route_google": await proxy_server.get_route("google.com"),
+        "route_k8s": await proxy_server.get_route(
+            "homeassistant.homeassistant.svc.cluster.local"
+        ),
     }
 
 

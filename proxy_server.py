@@ -13,9 +13,11 @@ Mode is configured at startup by app.py via configure().
 """
 
 import asyncio
+import ipaddress
 import logging
 import os
 import re
+import socket
 from collections.abc import Callable
 
 from gfwlist.provider import get_rules
@@ -25,6 +27,14 @@ logger = logging.getLogger("dynamic-pac.proxy")
 # Regexes to parse the PAC_PROXY string
 _SOCKS_RE = re.compile(r"SOCKS5?\s+([^:\s]+):(\d+)", re.I)
 _HTTP_RE = re.compile(r"PROXY\s+([^:\s]+):(\d+)", re.I)
+
+# Static process settings: these are intentionally read once at startup.
+CONNECT_TIMEOUT = float(os.getenv("PROXY_CONNECT_TIMEOUT", "15"))
+HEADER_TIMEOUT = float(os.getenv("PROXY_HEADER_TIMEOUT", "10"))
+IDLE_TIMEOUT = float(os.getenv("PROXY_IDLE_TIMEOUT", "300"))
+RULE_REFRESH_INTERVAL = float(os.getenv("PROXY_RULE_REFRESH_INTERVAL", "300"))
+MAX_REQUEST_LINE = int(os.getenv("PROXY_MAX_REQUEST_LINE", "8192"))
+MAX_HEADER_BYTES = int(os.getenv("PROXY_MAX_HEADER_BYTES", "32768"))
 
 # ---------------------------------------------------------------------------
 # Configurable data sources (set by app.py at startup)
@@ -139,8 +149,8 @@ def refresh_rules() -> bool:
     # Parse upstream from PAC_PROXY env var (always the live injected value)
     proxy_str = os.getenv("PAC_PROXY", "").strip()
     _upstream = _parse_proxy_config(proxy_str)
-    _direct_set = direct
-    _proxy_set = proxy
+    _direct_set = {_normalize_domain(domain) for domain in direct if domain}
+    _proxy_set = {_normalize_domain(domain) for domain in proxy if domain}
     _clear_dns_cache()
     _rules_loaded = True
 
@@ -190,7 +200,6 @@ def _is_always_direct(host: str) -> bool:
 
 def _is_private_ip(host: str) -> bool:
     """Check if host is a bare IP address in a private range."""
-    import ipaddress
     try:
         addr = ipaddress.ip_address(str(host))
         return addr.is_private
@@ -198,7 +207,7 @@ def _is_private_ip(host: str) -> bool:
         return False
 
 
-def get_route(host: str) -> str | None:
+async def get_route(host: str) -> str | None:
     """Determine routing for a host.
 
     Routing priority:
@@ -207,7 +216,8 @@ def get_route(host: str) -> str | None:
     3. `.cn` TLD → DIRECT (matches whitelist PAC behavior)
     4. In the configured direct set → DIRECT
     5. In the configured proxy set → PROXY
-    6. Default route (configurable: DIRECT or PROXY depending on mode)
+    6. Resolves to a private IPv4 address → DIRECT
+    7. Default route (configurable: DIRECT or PROXY depending on mode)
 
     Returns 'DIRECT' or 'PROXY', or None if rules aren't loaded yet.
     """
@@ -234,7 +244,7 @@ def get_route(host: str) -> str | None:
 
     # For hostnames not in any list, try DNS resolution once per refresh
     # If it resolves to a private IP, treat as DIRECT (handles k8s internal)
-    if _resolves_to_private(host):
+    if await _resolves_to_private(host):
         return "DIRECT"
 
     return _default_route
@@ -243,11 +253,12 @@ def get_route(host: str) -> str | None:
 _dns_cache: dict[str, bool | None] = {}
 
 
-def _resolves_to_private(host: str) -> bool | None:
+async def _resolves_to_private(host: str) -> bool | None:
     """Check if hostname resolves to a private IP address.
 
-    Returns True/False, or None if resolution failed (treat as proxy).
-    Results are cached per refresh cycle.
+    Returns True/False, or None if resolution failed. The caller applies the
+    mode-specific default route for False and None. Results, including failed
+    resolutions, are cached until the next rules refresh.
     """
     # Strip port if present (shouldn't happen but be safe)
     hostname = host.split(":")[0].lower()
@@ -256,13 +267,12 @@ def _resolves_to_private(host: str) -> bool | None:
     if _is_private_ip(hostname):
         return True
 
-    cached = _dns_cache.get(hostname)
-    if cached is not None:
-        return cached
+    if hostname in _dns_cache:
+        return _dns_cache[hostname]
 
     try:
-        import socket
-        addrs = socket.getaddrinfo(hostname, None)
+        loop = asyncio.get_running_loop()
+        addrs = await loop.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
         for family, _, _, _, sockaddr in addrs:
             ip = sockaddr[0]
             # Only check IPv4 for private range; Python's ipaddress marks
@@ -284,17 +294,21 @@ def _resolves_to_private(host: str) -> bool | None:
 def _clear_dns_cache() -> None:
     _dns_cache.clear()
 
+
+def _normalize_domain(domain: str) -> str:
+    """Normalize a DNS name for exact and suffix matching."""
+    return domain.strip().lower().rstrip(".")
+
+
 def _match_domain(host: str, domain_set: set[str]) -> bool:
     """Check if host matches any domain in domain_set (exact or subdomain).
 
     Domain matching is case-insensitive — HTTP hostnames are case-insensitive
     per RFC 3986, but clients may send CONNECT targets with mixed case.
     """
-    host_lower = host.lower()
-    if host_lower in domain_set:
-        return True
-    for domain in domain_set:
-        if host_lower.endswith("." + domain):
+    labels = _normalize_domain(host).split(".")
+    for index in range(len(labels)):
+        if ".".join(labels[index:]) in domain_set:
             return True
     return False
 
@@ -315,14 +329,18 @@ async def _socks5_connect(
         writer.close()
         raise ValueError(f"SOCKS5 handshake failed: {resp.hex()}")
 
-    # CONNECT request (domain name type)
-    host_bytes = host.encode("idna")
-    req = (
-        b"\x05\x01\x00\x03"
-        + bytes([len(host_bytes)])
-        + host_bytes
-        + port.to_bytes(2, "big")
-    )
+    # CONNECT request with the appropriate address type.
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        host_bytes = host.encode("idna")
+        if len(host_bytes) > 255:
+            writer.close()
+            raise ValueError("SOCKS5 destination hostname is too long")
+        encoded_host = b"\x03" + bytes([len(host_bytes)]) + host_bytes
+    else:
+        encoded_host = (b"\x01" if address.version == 4 else b"\x04") + address.packed
+    req = b"\x05\x01\x00" + encoded_host + port.to_bytes(2, "big")
     writer.write(req)
     await writer.drain()
 
@@ -343,6 +361,9 @@ async def _socks5_connect(
         await reader.readexactly(dlen + 2)  # domain + port
     elif atype == 0x04:
         await reader.readexactly(18)      # 16 IPv6 + 2 port
+    else:
+        writer.close()
+        raise ValueError(f"SOCKS5 returned unknown address type: {atype}")
 
     return reader, writer
 
@@ -357,8 +378,8 @@ async def _http_proxy_connect(
     await writer.drain()
 
     resp = await reader.readline()
-    parts = resp.decode().split(" ", 2)
-    if int(parts[1]) != 200:
+    parts = resp.decode("iso-8859-1", errors="replace").split(" ", 2)
+    if len(parts) < 2 or not parts[1].isdigit() or int(parts[1]) != 200:
         writer.close()
         raise ValueError(
             f"HTTP proxy connect failed for {host}:{port}: "
@@ -377,12 +398,7 @@ async def _http_proxy_connect(
 async def _direct_connect(
     host: str, port: int,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-    """Connect directly to host:port, preferring IPv4 over IPv6.
-
-    The server host has no IPv6 route, so constrain to AF_INET to avoid
-    ENETUNREACH from Happy Eyeballs trying AAAA records first.
-    """
-    import socket
+    """Connect directly over IPv4; this deployment has no IPv6 route."""
     return await asyncio.open_connection(host, port, family=socket.AF_INET)
 
 
@@ -393,7 +409,12 @@ async def _pipe(reader: asyncio.StreamReader,
     """Bidirectional data copy until EOF or error."""
     try:
         while True:
-            data = await reader.read(65536)
+            if IDLE_TIMEOUT > 0:
+                data = await asyncio.wait_for(
+                    reader.read(65536), timeout=IDLE_TIMEOUT,
+                )
+            else:
+                data = await reader.read(65536)
             if not data:
                 break
             writer.write(data)
@@ -415,13 +436,17 @@ async def handle_connect(
     """Handle a single CONNECT request."""
     try:
         # Read the CONNECT request line
-        data = await reader.readline()
+        data = await asyncio.wait_for(reader.readline(), timeout=HEADER_TIMEOUT)
         if not data:
             writer.close()
             return
+        if len(data) > MAX_REQUEST_LINE:
+            writer.write(b"HTTP/1.1 414 URI Too Long\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+            return
 
-        line = data.decode().strip()
-        parts = line.split(" ")
+        line = data.decode("iso-8859-1").strip()
+        parts = line.split()
 
         if len(parts) < 2 or parts[0].upper() != "CONNECT":
             writer.write(b"HTTP/1.1 405 Method Not Allowed\r\n\r\n")
@@ -431,54 +456,64 @@ async def handle_connect(
 
         # Parse host:port from the request target
         target = parts[1]
-        if ":" in target:
+        if target.startswith("[") and "]:" in target:
+            host, port_str = target[1:].rsplit("]:", 1)
+        elif target.count(":") == 1:
             host, port_str = target.rsplit(":", 1)
-            try:
-                port = int(port_str)
-            except ValueError:
-                writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
-                await writer.drain()
-                writer.close()
-                return
+        elif ":" in target:
+            host, port_str = target.strip("[]"), "443"
         else:
-            host = target
-            port = 443  # default for CONNECT
+            host, port_str = target, "443"
 
-        # Drain any remaining request headers
+        try:
+            port = int(port_str)
+            if not 1 <= port <= 65535:
+                raise ValueError
+        except ValueError:
+            writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+            return
+
+        if not host:
+            writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+            return
+
+        # Drain remaining request headers with size and time limits.
+        header_bytes = 0
         while True:
-            hdr = await reader.readline()
+            hdr = await asyncio.wait_for(reader.readline(), timeout=HEADER_TIMEOUT)
+            header_bytes += len(hdr)
+            if header_bytes > MAX_HEADER_BYTES:
+                writer.write(b"HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n")
+                await writer.drain()
+                return
             if hdr in (b"\r\n", b"\n", b""):
                 break
 
-        route = get_route(host)
+        route = await get_route(host)
         if route is None:
             writer.write(b"HTTP/1.1 503 Service Unavailable\r\n\r\n")
             await writer.drain()
             writer.close()
             return
 
-        # Connect to upstream
+        # Connect to the selected destination with an overall deadline.
         try:
             if route == "DIRECT":
-                upstream_reader, upstream_writer = await _direct_connect(
-                    host, port,
-                )
+                connect_coro = _direct_connect(host, port)
+            elif "socks5" in _upstream:
+                ph, pp = _upstream["socks5"]
+                connect_coro = _socks5_connect(host, port, ph, pp)
+            elif "http" in _upstream:
+                ph, pp = _upstream["http"]
+                connect_coro = _http_proxy_connect(host, port, ph, pp)
             else:
-                # Prefer SOCKS5, fall back to HTTP CONNECT
-                if "socks5" in _upstream:
-                    ph, pp = _upstream["socks5"]
-                    upstream_reader, upstream_writer = await _socks5_connect(
-                        host, port, ph, pp,
-                    )
-                elif "http" in _upstream:
-                    ph, pp = _upstream["http"]
-                    upstream_reader, upstream_writer = \
-                        await _http_proxy_connect(host, port, ph, pp)
-                else:
-                    upstream_reader, upstream_writer = await _direct_connect(
-                        host, port,
-                    )
-        except (OSError, ConnectionError, ValueError) as e:
+                raise ValueError("route requires a proxy but no upstream is configured")
+            upstream_reader, upstream_writer = await asyncio.wait_for(
+                connect_coro, timeout=CONNECT_TIMEOUT,
+            )
+        except (OSError, ConnectionError, ValueError, asyncio.TimeoutError) as e:
             logger.warning("Connect failed: %s -> %s: %s", host, route, e)
             writer.write(
                 b"HTTP/1.1 502 Bad Gateway\r\n\r\n"
@@ -496,17 +531,16 @@ async def handle_connect(
         # Bidirectional pipe
         task_a = asyncio.create_task(_pipe(reader, upstream_writer))
         task_b = asyncio.create_task(_pipe(upstream_reader, writer))
-        done, _ = await asyncio.wait(
+        _, pending = await asyncio.wait(
             [task_a, task_b], return_when=asyncio.FIRST_COMPLETED,
         )
-        # Cancel the other task
-        for t in done:
-            other = task_b if t is task_a else task_a
-            other.cancel()
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(task_a, task_b, return_exceptions=True)
 
         logger.info("Tunnel closed: %s:%d", host, port)
 
-    except (ConnectionError, OSError) as e:
+    except (ConnectionError, OSError, asyncio.TimeoutError) as e:
         logger.debug("Connection error: %s", e)
     except Exception:
         logger.exception("Unexpected error in CONNECT handler")
@@ -535,11 +569,28 @@ async def start(host: str = "0.0.0.0",
 
     server = await asyncio.start_server(handle_connect, host, port)
 
+    async def refresh_periodically() -> None:
+        while True:
+            await asyncio.sleep(RULE_REFRESH_INTERVAL)
+            try:
+                refresh_rules()
+            except Exception:
+                logger.exception("Failed to refresh CONNECT proxy rules")
+
+    refresh_task = None
+    if RULE_REFRESH_INTERVAL > 0:
+        refresh_task = asyncio.create_task(refresh_periodically())
+
     if ready_event is not None:
         ready_event.set()
 
     logger.info("CONNECT proxy listening on %s:%d (%d direct, %d proxy, default=%s)",
                 host, port, len(_direct_set), len(_proxy_set), _default_route)
 
-    async with server:
-        await server.serve_forever()
+    try:
+        async with server:
+            await server.serve_forever()
+    finally:
+        if refresh_task is not None:
+            refresh_task.cancel()
+            await asyncio.gather(refresh_task, return_exceptions=True)
