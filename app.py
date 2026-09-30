@@ -284,9 +284,18 @@ async def get_rules(
 @app.get("/debug/proxy")
 async def debug_proxy():
     """Debug endpoint to inspect proxy server state."""
+    socks5_list = proxy_server._upstream.get("socks5", [])
+    http_list = proxy_server._upstream.get("http", [])
     return {
-        "upstream_host": proxy_server._upstream.get("socks5", (None, None))[0],
-        "upstream_port": proxy_server._upstream.get("socks5", (None, None))[1],
+        "upstream_socks5": [
+            {"host": h, "port": p} for h, p in socks5_list
+        ],
+        "upstream_http": [
+            {"host": h, "port": p} for h, p in http_list
+        ],
+        # Backwards-compat: first SOCKS5 entry (None if none configured)
+        "upstream_host": socks5_list[0][0] if socks5_list else None,
+        "upstream_port": socks5_list[0][1] if socks5_list else None,
         "rules_loaded": proxy_server._rules_loaded,
         "direct_count": len(proxy_server._direct_set),
         "proxy_count": len(proxy_server._proxy_set),

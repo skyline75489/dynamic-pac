@@ -16,6 +16,7 @@ import asyncio
 import ipaddress
 import logging
 import os
+import random
 import re
 import socket
 from collections.abc import Callable
@@ -51,7 +52,7 @@ _default_route: str = "DIRECT"
 # ---------------------------------------------------------------------------
 _direct_set: set[str] = set()
 _proxy_set: set[str] = set()
-_upstream: dict[str, tuple[str, int]] = {}  # {"socks5": (host, port), "http": ...}
+_upstream: dict[str, list[tuple[str, int]]] = {}  # {"socks5": [(h,p),...], "http": ...}
 _rules_loaded = False
 
 
@@ -113,15 +114,18 @@ def get_gfwlist_proxy_domains() -> set[str] | None:
 
 # ── Proxy config parsing ──────────────────────────────────────────────────
 
-def _parse_proxy_config(proxy_str: str) -> dict[str, tuple[str, int]]:
-    """Extract upstream proxies from a PAC proxy string."""
-    result: dict[str, tuple[str, int]] = {}
-    socks = _SOCKS_RE.search(proxy_str)
-    if socks:
-        result["socks5"] = (socks.group(1), int(socks.group(2)))
-    http = _HTTP_RE.search(proxy_str)
-    if http:
-        result["http"] = (http.group(1), int(http.group(2)))
+def _parse_proxy_config(proxy_str: str) -> dict[str, list[tuple[str, int]]]:
+    """Extract upstream proxies from a PAC proxy string.
+
+    Multiple entries of the same type are preserved as a list, in the order
+    they appear in `proxy_str`. Selection between them is randomized; the
+    caller is expected to try the next one on connect failure.
+    """
+    result: dict[str, list[tuple[str, int]]] = {}
+    for m in _SOCKS_RE.finditer(proxy_str):
+        result.setdefault("socks5", []).append((m.group(1), int(m.group(2))))
+    for m in _HTTP_RE.finditer(proxy_str):
+        result.setdefault("http", []).append((m.group(1), int(m.group(2))))
     return result
 
 
@@ -156,7 +160,8 @@ def refresh_rules() -> bool:
 
     logger.info(
         "Rules refreshed: %d direct, %d proxy entries, %d upstreams, default=%s",
-        len(direct), len(proxy), len(_upstream), _default_route,
+        len(direct), len(proxy),
+        sum(len(v) for v in _upstream.values()), _default_route,
     )
     return True
 
@@ -318,80 +323,106 @@ def _match_domain(host: str, domain_set: set[str]) -> bool:
 async def _socks5_connect(
     host: str, port: int, proxy_host: str, proxy_port: int,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-    """Connect to host:port through a SOCKS5 proxy."""
+    """Connect to host:port through a SOCKS5 proxy.
+
+    Raises ValueError on protocol-level rejection (unsupported version,
+    auth required, refused/banned address type) or asyncio.IncompleteReadError
+    if the upstream closes mid-handshake. On any failure the TCP writer
+    is closed before raising, so the caller does not need to clean up.
+    """
     reader, writer = await asyncio.open_connection(proxy_host, proxy_port)
-
-    # SOCKS5 greeting: no auth
-    writer.write(b"\x05\x01\x00")
-    await writer.drain()
-    resp = await reader.readexactly(2)
-    if resp[0] != 0x05 or resp[1] != 0x00:
-        writer.close()
-        raise ValueError(f"SOCKS5 handshake failed: {resp.hex()}")
-
-    # CONNECT request with the appropriate address type.
     try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        host_bytes = host.encode("idna")
-        if len(host_bytes) > 255:
+        # SOCKS5 greeting: no auth
+        writer.write(b"\x05\x01\x00")
+        await writer.drain()
+        resp = await reader.readexactly(2)
+        if resp[0] != 0x05 or resp[1] != 0x00:
+            raise ValueError(f"SOCKS5 handshake failed: {resp.hex()}")
+
+        # CONNECT request with the appropriate address type.
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            host_bytes = host.encode("idna")
+            if len(host_bytes) > 255:
+                raise ValueError("SOCKS5 destination hostname is too long")
+            encoded_host = b"\x03" + bytes([len(host_bytes)]) + host_bytes
+        else:
+            encoded_host = (b"\x01" if address.version == 4 else b"\x04") + address.packed
+        req = b"\x05\x01\x00" + encoded_host + port.to_bytes(2, "big")
+        writer.write(req)
+        await writer.drain()
+
+        # Read response header
+        resp = await reader.readexactly(4)
+        if resp[0] != 0x05 or resp[1] != 0x00:
+            raise ValueError(
+                f"SOCKS5 connect failed for {host}:{port}: {resp.hex()}"
+            )
+
+        # Skip remaining address info
+        atype = resp[3]
+        if atype == 0x01:
+            await reader.readexactly(6)       # 4 IPv4 + 2 port
+        elif atype == 0x03:
+            dlen = (await reader.readexactly(1))[0]
+            await reader.readexactly(dlen + 2)  # domain + port
+        elif atype == 0x04:
+            await reader.readexactly(18)      # 16 IPv6 + 2 port
+        else:
+            raise ValueError(f"SOCKS5 returned unknown address type: {atype}")
+    except BaseException:
+        # Close the writer on any handshake failure (including
+        # IncompleteReadError if the upstream hangs up mid-handshake, or
+        # asyncio.CancelledError if the caller times us out). The closed
+        # socket lets the OS release the file descriptor promptly.
+        try:
             writer.close()
-            raise ValueError("SOCKS5 destination hostname is too long")
-        encoded_host = b"\x03" + bytes([len(host_bytes)]) + host_bytes
-    else:
-        encoded_host = (b"\x01" if address.version == 4 else b"\x04") + address.packed
-    req = b"\x05\x01\x00" + encoded_host + port.to_bytes(2, "big")
-    writer.write(req)
-    await writer.drain()
-
-    # Read response header
-    resp = await reader.readexactly(4)
-    if resp[0] != 0x05 or resp[1] != 0x00:
-        writer.close()
-        raise ValueError(
-            f"SOCKS5 connect failed for {host}:{port}: {resp.hex()}"
-        )
-
-    # Skip remaining address info
-    atype = resp[3]
-    if atype == 0x01:
-        await reader.readexactly(6)       # 4 IPv4 + 2 port
-    elif atype == 0x03:
-        dlen = (await reader.readexactly(1))[0]
-        await reader.readexactly(dlen + 2)  # domain + port
-    elif atype == 0x04:
-        await reader.readexactly(18)      # 16 IPv6 + 2 port
-    else:
-        writer.close()
-        raise ValueError(f"SOCKS5 returned unknown address type: {atype}")
-
+        except Exception:
+            pass
+        raise
     return reader, writer
 
 
 async def _http_proxy_connect(
     host: str, port: int, proxy_host: str, proxy_port: int,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-    """Connect to host:port through an HTTP CONNECT proxy."""
+    """Connect to host:port through an HTTP CONNECT proxy.
+
+    Raises ValueError on non-2xx proxy responses, or
+    asyncio.IncompleteReadError / OSError if the upstream closes or stalls
+    mid-handshake. On any failure the TCP writer is closed before raising,
+    so the caller does not need to clean up.
+    """
     reader, writer = await asyncio.open_connection(proxy_host, proxy_port)
-    req = f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n"
-    writer.write(req.encode())
-    await writer.drain()
+    try:
+        req = f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n"
+        writer.write(req.encode())
+        await writer.drain()
 
-    resp = await reader.readline()
-    parts = resp.decode("iso-8859-1", errors="replace").split(" ", 2)
-    if len(parts) < 2 or not parts[1].isdigit() or int(parts[1]) != 200:
-        writer.close()
-        raise ValueError(
-            f"HTTP proxy connect failed for {host}:{port}: "
-            f"{resp.decode().strip()}"
-        )
+        resp = await reader.readline()
+        parts = resp.decode("iso-8859-1", errors="replace").split(" ", 2)
+        if len(parts) < 2 or not parts[1].isdigit() or int(parts[1]) != 200:
+            raise ValueError(
+                f"HTTP proxy connect failed for {host}:{port}: "
+                f"{resp.decode().strip()}"
+            )
 
-    # Drain remaining response headers
-    while True:
-        line = await reader.readline()
-        if line in (b"\r\n", b"\n", b""):
-            break
-
+        # Drain remaining response headers
+        while True:
+            line = await reader.readline()
+            if line in (b"\r\n", b"\n", b""):
+                break
+    except BaseException:
+        # Close the writer on any handshake failure (including
+        # IncompleteReadError if the upstream closes mid-response, or
+        # asyncio.CancelledError if the caller times us out). The closed
+        # socket lets the OS release the file descriptor promptly.
+        try:
+            writer.close()
+        except Exception:
+            pass
+        raise
     return reader, writer
 
 
@@ -400,6 +431,70 @@ async def _direct_connect(
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Connect directly over IPv4; this deployment has no IPv6 route."""
     return await asyncio.open_connection(host, port, family=socket.AF_INET)
+
+
+async def _connect_with_failover(
+    host: str, port: int, proxy_type: str,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
+    """Connect via one of the configured upstreams of the given type.
+
+    Tries upstreams in a fresh randomized order on every call (uniform
+    random choice, not sticky — favors load-spread over connection reuse
+    for short-lived CONNECTs). On connect failure (OSError or per-upstream
+    timeout) advances to the next candidate.
+
+    Budgeting: the outer CONNECT_TIMEOUT bounds the *total* time across all
+    attempts. Each attempt is given `remaining / candidates_left` so a
+    stalled/blackholed first upstream cannot consume the whole budget and
+    starve the healthy backups — without this, one silently-dropped SYN
+    makes load-balancing unreliable whenever a backend is blackholed
+    rather than failing fast.
+
+    Returns (reader, writer, "<type>://<host>:<port>") describing the
+    upstream that succeeded.
+    """
+    candidates = list(_upstream.get(proxy_type, []))
+    if not candidates:
+        raise ValueError(f"no upstream configured for type={proxy_type!r}")
+    random.shuffle(candidates)
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + CONNECT_TIMEOUT
+    last_err: Exception | None = None
+    tried: list[str] = []
+
+    remaining_candidates = len(candidates)
+    for ph, pp in candidates:
+        remaining_candidates -= 1
+        now = loop.time()
+        if now >= deadline:
+            break
+        # Per-attempt slice: share the remaining budget across this attempt
+        # plus any not-yet-tried candidates, so a stalled upstream cannot
+        # consume the whole deadline before backups are tried.
+        slice_budget = (deadline - now) / (remaining_candidates + 1)
+        tried.append(f"{ph}:{pp}")
+        try:
+            if proxy_type == "socks5":
+                coro = _socks5_connect(host, port, ph, pp)
+            else:
+                coro = _http_proxy_connect(host, port, ph, pp)
+            reader, writer = await asyncio.wait_for(coro, timeout=slice_budget)
+            return reader, writer, f"{proxy_type}://{ph}:{pp}"
+        except (OSError, ConnectionError, ValueError,
+                asyncio.TimeoutError, asyncio.IncompleteReadError) as e:
+            last_err = e
+            logger.debug(
+                "Upstream %s://%s:%s failed for %s:%d: %s",
+                proxy_type, ph, pp, host, port, e,
+            )
+            continue
+
+    # All candidates exhausted within the deadline.
+    raise ConnectionError(
+        f"all upstreams failed for {host}:{port} "
+        f"(tried {tried}, last error: {last_err})"
+    )
 
 
 # ── Data piping ────────────────────────────────────────────────────────────
@@ -499,20 +594,22 @@ async def handle_connect(
             return
 
         # Connect to the selected destination with an overall deadline.
+        # For PROXY routes with multiple upstreams of the chosen type, try
+        # in randomized order, advancing on connect failure.
         try:
             if route == "DIRECT":
-                connect_coro = _direct_connect(host, port)
+                upstream_reader, upstream_writer = await asyncio.wait_for(
+                    _direct_connect(host, port), timeout=CONNECT_TIMEOUT,
+                )
+                chosen_route = "DIRECT"
             elif "socks5" in _upstream:
-                ph, pp = _upstream["socks5"]
-                connect_coro = _socks5_connect(host, port, ph, pp)
+                upstream_reader, upstream_writer, chosen_route = \
+                    await _connect_with_failover(host, port, "socks5")
             elif "http" in _upstream:
-                ph, pp = _upstream["http"]
-                connect_coro = _http_proxy_connect(host, port, ph, pp)
+                upstream_reader, upstream_writer, chosen_route = \
+                    await _connect_with_failover(host, port, "http")
             else:
                 raise ValueError("route requires a proxy but no upstream is configured")
-            upstream_reader, upstream_writer = await asyncio.wait_for(
-                connect_coro, timeout=CONNECT_TIMEOUT,
-            )
         except (OSError, ConnectionError, ValueError, asyncio.TimeoutError) as e:
             logger.warning("Connect failed: %s -> %s: %s", host, route, e)
             writer.write(
@@ -526,7 +623,7 @@ async def handle_connect(
         writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await writer.drain()
 
-        logger.info("Tunnel established: %s:%d -> %s", host, port, route)
+        logger.info("Tunnel established: %s:%d -> %s", host, port, chosen_route)
 
         # Bidirectional pipe
         task_a = asyncio.create_task(_pipe(reader, upstream_writer))
