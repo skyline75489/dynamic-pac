@@ -31,6 +31,7 @@ from collections.abc import AsyncIterator, Callable
 from urllib.parse import SplitResult, urlsplit
 
 from gfwlist.provider import get_rules
+from pac_runtime import ts_passthrough_enabled
 
 logger = logging.getLogger("dynamic-pac.proxy")
 
@@ -208,6 +209,11 @@ def _is_always_direct(host: str) -> bool:
     for suffix in (".svc", ".svc.cluster.local", ".local", ".internal"):
         if host_lower.endswith(suffix):
             return True
+    # Tailscale MagicDNS — only when Tailscale support is configured
+    if ts_passthrough_enabled() and (
+        host_lower == "ts.net" or host_lower.endswith(".ts.net")
+    ):
+        return True
     return False
 
 

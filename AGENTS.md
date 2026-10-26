@@ -55,6 +55,9 @@ The CONNECT proxy itself does not expose an HTTP endpoint; clients point at `LIS
 | Variable | Required | Default | Notes |
 |----------|----------|---------|-------|
 | `PAC_PROXY` | yes | — | Injected at serving time (immediate working). e.g. `SOCKS5 1.2.3.4:1080; SOCKS 1.2.3.4:1080; PROXY 1.2.3.4:8080; DIRECT;`. Also parsed by the CONNECT proxy for upstream SOCKS5/HTTP targets. |
+| `PAC_PROXY_TS_ALT` | no | — | Alternative proxy chain used by tailnet clients, e.g. `SOCKS5 100.101.1.2:1080; DIRECT;`. Empty disables tailnet-aware selection. |
+| `TS_CLIENT_CIDRS` | no | `100.64.0.0/10` | Client ranges treated as tailnet clients — comma-separated (`100.64.0.0/10,10.0.0.0/8`) or a JSON list. |
+| `TS_PASSTHROUGH_ENABLED` | no | — | Explicitly enable the `.ts.net` → DIRECT passthrough rule (e.g. `1`). |
 | `REMOTE_PAC_URL` | yes | — | URL to fetch the upstream remote PAC from |
 | `LISTEN_HOST` | no | `0.0.0.0` | FastAPI listen address |
 | `LISTEN_PORT` | no | `8080` | FastAPI listen port |
@@ -91,6 +94,7 @@ LRU caches up to 32 unique (hash_base, mask_step) combinations.
 
 ```
 ├── app.py                         # FastAPI server + lifespan wiring for proxy_server
+├── pac_runtime.py                 # Tailnet-aware proxy selection (server-side + PAC runtime injection)
 ├── proxy_server.py                # HTTP CONNECT proxy (asyncio, suffix-matched routing)
 ├── gfwlist/
 │   ├── __init__.py
@@ -141,6 +145,32 @@ SOCKS5 1.2.3.4:1080; SOCKS 1.2.3.4:1080; PROXY 1.2.3.4:8080; DIRECT;
 
 The CONNECT proxy also parses this string to discover its upstream SOCKS5 and HTTP targets.
 
+## Tailnet-aware proxy selection (PAC side)
+
+Tailscale-specific behaviour is **opt-in**: the `.ts.net` → DIRECT
+passthrough rule is only active when at least one Tailscale environment
+variable is present (`PAC_PROXY_TS_ALT`, `TS_CLIENT_CIDRS` or
+`TS_PASSTHROUGH_ENABLED`). With none of them set, `.ts.net` is *not*
+special-cased and the PAC is served unchanged.
+
+`pac_runtime.py` lets clients that are on a tailnet (e.g. Tailscale) use a
+different upstream proxy address than the public one:
+
+- **Server-side (exact)** — `/proxy.pac` inspects `request.client.host`; if it
+  falls inside `TS_CLIENT_CIDRS`, the PAC is rendered with `PAC_PROXY_TS_ALT`
+  baked into `var proxy`.
+- **Client-side (dynamic)** — the served PAC carries a small runtime that
+  evaluates `myIpAddress()` on every request and swaps the proxy chain for
+  `PAC_PROXY_TS_ALT` when the client itself is on the tailnet. Only proxy
+  chains are swapped; `DIRECT` decisions are never overridden.
+
+Both mechanisms are no-ops when `PAC_PROXY_TS_ALT` is empty. The runtime wraps
+the PAC's `FindProxyForURL` (renamed to `__dpOriginalFindProxyForURL`), so
+it works for the remote/gfwlist, flora and whitelist sources alike.
+
+With Tailscale enabled, `.ts.net` (and `ts.net`) hosts always resolve to
+`DIRECT` in the whitelist PAC, the flora PAC and the CONNECT proxy.
+
 ## Docker
 
 Uses `mcr.microsoft.com/azurelinux/base/python:3.12`. Exposes ports 8080 (FastAPI) and 8888 (CONNECT proxy), runs as non-root `appuser`.
@@ -148,3 +178,7 @@ Uses `mcr.microsoft.com/azurelinux/base/python:3.12`. Exposes ports 8080 (FastAP
 ## Helm
 
 Chart at `helm/dynamic-pac/`. Key templates: `deployment.yaml`, `service.yaml`, `secret.yaml`.
+
+Tailscale values: `pacProxyTsAlt`, `tsClientCidrs` and `tsPassthroughEnabled`
+(the last one defaults to `"1"`, so the `.ts.net` → DIRECT passthrough rule
+is active in Helm deployments unless it is turned off).

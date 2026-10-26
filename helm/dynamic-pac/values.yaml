@@ -8,6 +8,20 @@ image:
 # Required: the SOCKS5 proxy string injected into the PAC file.
 pacProxy: ""
 
+# Optional: alternative proxy chain used by clients on the tailnet
+# (e.g. "SOCKS5 100.101.1.2:1080; PROXY 100.101.1.2:8080; DIRECT;").
+# Setting it also enables the Tailscale-specific rules.
+pacProxyTsAlt: ""
+
+# Optional: IPv4 ranges considered to be tailnet clients. Either a
+# comma-separated list or a JSON list. Defaults to 100.64.0.0/10 when set.
+# Setting it also enables the Tailscale-specific rules.
+tsClientCidrs: ""
+
+# Optional: enable the Tailscale passthrough rule (".ts.net" -> DIRECT)
+# even when no other Tailscale variable is set. Enabled by default.
+tsPassthroughEnabled: "1"
+
 # Required: the remote URL to fetch the PAC rules from.
 remotePacUrl: ""
 

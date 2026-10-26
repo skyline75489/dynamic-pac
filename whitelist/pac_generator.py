@@ -7,6 +7,8 @@ Uses __PROXY_PLACEHOLDER__ for serving-time proxy injection.
 
 from typing import List
 
+from pac_runtime import ts_passthrough_enabled
+
 PROXY_PLACEHOLDER = "__PROXY_PLACEHOLDER__"
 
 
@@ -20,6 +22,13 @@ def generate_pac_content(domains: List[str]) -> str:
     # Build the domain whitelist as a JSON object (not JSON array)
     # so hasOwnProperty lookups are O(1).
     domain_json = "{\n" + "\n".join(f'"{d}":1,' for d in domains) + '\n"yourdomainhere.com":1\n}'
+
+    # Tailscale MagicDNS is only special-cased when Tailscale support is
+    # configured (see pac_runtime.ts_passthrough_enabled).
+    ts_check = (
+        ' || host.endsWith(".ts.net") || host == "ts.net"'
+        if ts_passthrough_enabled() else ""
+    )
 
     pac = f"""var proxy = '{PROXY_PLACEHOLDER}';
 var direct = 'DIRECT';
@@ -184,7 +193,7 @@ function isInDomains(domain_dict, host) {{
     if (suffix === "cn") {{
         return true;
     }}
-    if (host.endsWith(".nip.io") || host.endsWith(".sslip.io") || host.endsWith(".traefik.me")) {{
+    if (host.endsWith(".nip.io") || host.endsWith(".sslip.io") || host.endsWith(".traefik.me"){ts_check}) {{
         return true;
     }}
     pos = host.lastIndexOf('.', pos - 1);

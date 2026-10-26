@@ -4,7 +4,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Response, Query
+from fastapi import FastAPI, Response, Query, Request
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,6 +62,17 @@ from whitelist.provider import (  # noqa: E402
 # Proxy server
 # ---------------------------------------------------------------------------
 import proxy_server  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# Tailnet-aware proxy selection (PAC side)
+# ---------------------------------------------------------------------------
+from pac_runtime import (  # noqa: E402
+    apply_alt_proxy_runtime,
+    get_alt_proxy,
+    get_ts_cidrs,
+    select_proxy_chain,
+    ts_passthrough_enabled,
+)
 
 # ---------------------------------------------------------------------------
 # Redis (optional)
@@ -145,11 +156,18 @@ app = FastAPI(lifespan=_lifespan)
 
 @app.get("/proxy.pac")
 async def proxy_pac(
+    request: Request,
     source: str = Query("remote", description="PAC source: 'remote' (gfwlist), 'flora' (China IPs), or 'whitelist' (Chinese domains)"),
     hash_base: int = Query(3011, ge=1001, le=99999, description="Hash table size for Flora PAC (default: 3011)"),
     mask_step: int = Query(2, ge=1, le=8, description="Network mask fragmentation step for Flora PAC (default: 2)"),
     minify: bool = Query(False, description="Minify the resulting PAC by stripping comments and whitespace"),
 ):
+    # Tailnet-aware proxy selection: clients inside the tailnet CIDRs get
+    # the alternative proxy chain (PAC_PROXY_TS_ALT) baked into the PAC.
+    alt_proxy = get_alt_proxy()
+    client_ip = request.client.host if request.client else None
+    proxy_chain, server_tailnet = select_proxy_chain(client_ip, PAC_PROXY, alt_proxy)
+
     if source == "flora":
         if not is_flora_ready():
             return Response(
@@ -157,50 +175,37 @@ async def proxy_pac(
                 content="Flora PAC not yet ready (still fetching APNIC data)",
             )
 
-        content = get_pac_content(hash_base, mask_step, PAC_PROXY)
+        content = get_pac_content(hash_base, mask_step, proxy_chain)
         if content is None:
             return Response(status_code=503, content="Flora PAC unavailable")
-
-        if minify:
-            content = _minify_js(content)
-
-        return Response(
-            content=content,
-            media_type="text/plain",  # text/plain so browsers display inline instead of downloading; PAC exec engines ignore MIME type
-        )
-
-    if source == "whitelist":
+    elif source == "whitelist":
         if not is_whitelist_ready():
             return Response(
                 status_code=503,
                 content="Whitelist PAC not yet ready (still fetching domain list)",
             )
 
-        content = get_whitelist_pac(PAC_PROXY)
+        content = get_whitelist_pac(proxy_chain)
         if content is None:
             return Response(status_code=503, content="Whitelist PAC unavailable")
+    else:
+        # Default: gfwlist / remote PAC
+        if not is_gfwlist_ready():
+            return Response(
+                status_code=503,
+                content="Remote PAC not yet ready",
+            )
 
-        if minify:
-            content = _minify_js(content)
-
-        return Response(
-            content=content,
-            media_type="text/plain",  # text/plain so browsers display inline instead of downloading; PAC exec engines ignore MIME type
-        )
-
-    # Default: gfwlist / remote PAC
-    if not is_gfwlist_ready():
-        return Response(
-            status_code=503,
-            content="Remote PAC not yet ready",
-        )
-
-    content = get_gfwlist_pac(PAC_PROXY)
-    if content is None:
-        return Response(status_code=503, content="Remote PAC unavailable")
+        content = get_gfwlist_pac(proxy_chain)
+        if content is None:
+            return Response(status_code=503, content="Remote PAC unavailable")
 
     if minify:
         content = _minify_js(content)
+
+    # Client-side runtime: switch to the alternative chain when the
+    # requesting client itself is on the tailnet (myIpAddress()).
+    content = apply_alt_proxy_runtime(content, alt_proxy, server_tailnet)
 
     return Response(
         content=content,
@@ -304,6 +309,11 @@ async def debug_proxy():
         "route_k8s": await proxy_server.get_route(
             "homeassistant.homeassistant.svc.cluster.local"
         ),
+        "tailnet": {
+            "passthrough_enabled": ts_passthrough_enabled(),
+            "alt_proxy": get_alt_proxy(),
+            "client_cidrs": [str(net) for net in get_ts_cidrs()],
+        },
     }
 
 

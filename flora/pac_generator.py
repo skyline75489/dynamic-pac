@@ -11,6 +11,7 @@ from typing import List
 
 from .ip_data import merge_all
 from .network_ops import fregment_nets, hash_nets, calculate_prefix_range
+from pac_runtime import ts_direct_check_js
 
 PROXY_PLACEHOLDER = '__PROXY_PLACEHOLDER__'
 
@@ -195,6 +196,7 @@ function FindProxyForURL(url, host) {
         return 'DIRECT';
     }
 
+""" + ts_direct_check_js() + """
     var ip = dnsResolve(host);
 
     if (ip == null || ip == '' || """ + generate_no_proxy_js(no_proxy) + """ lookup_ip(ip)) {
