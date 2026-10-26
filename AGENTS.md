@@ -173,7 +173,14 @@ With Tailscale enabled, `.ts.net` (and `ts.net`) hosts always resolve to
 
 ## Docker
 
-Uses `mcr.microsoft.com/azurelinux/base/python:3.12`. Exposes ports 8080 (FastAPI) and 8888 (CONNECT proxy), runs as non-root `appuser`.
+Uses `python:3.13-slim`. Exposes port 8080 (FastAPI) — 8888 (CONNECT proxy) is
+reachable but not declared — and runs as non-root `appuser`.
+
+Build & push scripts:
+
+- `build_and_push_image.sh` — local `podman build` + push to `localhost:5000`
+- `kaniko-build.sh` / `kaniko-build.yaml` — in-cluster Kaniko build (tags with
+  the short commit SHA and `:latest`, pushes to the zot registry)
 
 ## Helm
 
