@@ -9,8 +9,19 @@ on:
   workflow_dispatch:
 
 # The 'ubuntu-latest' label maps to an Ubuntu 26.04 job container, so
-# actions/setup-python resolves linux-26.04 assets from actions/python-versions
-# and installs the requested interpreter normally.
+# actions/setup-python resolves linux-26.04 assets from actions/python-versions.
+#
+# Python is pinned to an exact patch so setup-python hits the populated tool
+# cache (/opt/hostedtoolcache) instead of downloading a 100 MB tarball from
+# GitHub releases on every run.
+#
+# pip is pointed at the USTC mirror, which is far faster than pypi.org from
+# this network.
+
+env:
+  PYTHON_VERSION: "3.13.18"
+  PIP_INDEX_URL: "https://mirrors.ustc.edu.cn/pypi/simple"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
   lint:
@@ -23,12 +34,12 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install lint tools
         run: |
           python -m pip install --upgrade pip
-          pip install ruff
+          python -m pip install ruff
 
       - name: Ruff lint
         run: ruff check --output-format=github .
@@ -49,12 +60,12 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
 
       - name: Show interpreter
         run: python --version
