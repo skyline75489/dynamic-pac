@@ -166,7 +166,14 @@ async def _lifespan(_app: FastAPI):
         pass
 
     if _redis is not None:
-        await _redis.aclose()
+        # aclose() releases the connection and disconnects the pool, both of
+        # which can raise (TimeoutError while closing, KeyError from pool
+        # bookkeeping). Closing is best effort: a failure here must not break
+        # shutdown, and is consistent with the providers' Redis handling.
+        try:
+            await _redis.aclose()
+        except Exception:
+            logger.warning("Redis close failed during shutdown", exc_info=True)
 
 
 app = FastAPI(lifespan=_lifespan)
