@@ -1,0 +1,72 @@
+name: Lint & Test
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+  workflow_dispatch:
+
+# The 'linux' runner is AlmaLinux 10.2 running act_runner in host mode.
+#
+# It provides the system CPython 3.12 at /usr/bin/python3, but no pip (PEP 668
+# externally-managed environment). Every job therefore creates its own venv,
+# which bootstraps pip via ensurepip.
+#
+# actions/setup-python is deliberately NOT used: it targets platforms keyed to
+# the Ubuntu releases in actions/python-versions and queries them as
+# linux/amd64, so it never matches this host (AlmaLinux reports linux/amd64 but
+# has "platform_version" assets only under the rhel entries, which the action
+# does not select). It fails with:
+#   The version '3.13.x' ... was not found for this operating system.
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: linux
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create venv
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python --version
+
+      - name: Install lint tools
+        run: |
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/pip install ruff
+
+      - name: Ruff lint
+        run: .venv/bin/ruff check --output-format=github .
+
+      - name: Ruff format check
+        run: .venv/bin/ruff format --check .
+
+      - name: Byte-compile all modules
+        run: .venv/bin/python -m compileall -q . -x '(__pycache__|\.venv)'
+
+  test:
+    name: Test
+    runs-on: linux
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create venv and install dependencies
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Show interpreter
+        run: .venv/bin/python --version
+
+      - name: Run unit tests
+        env:
+          REMOTE_PAC_URL: "http://unused.invalid/proxy.pac"
+          PAC_PROXY: "SOCKS5 127.0.0.1:1080; DIRECT;"
+        run: |
+          .venv/bin/python -m unittest discover -v -p 'test_*.py'

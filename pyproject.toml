@@ -1,0 +1,31 @@
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["__pycache__", ".venv"]
+
+[tool.ruff.lint]
+# Start from a strict-but-fixable baseline. Broader rulesets can be enabled
+# incrementally as the codebase is cleaned up.
+select = [
+    "E4",   # import formatting
+    "E7",   # statement-level issues
+    "E9",   # runtime errors (syntax/undefined names)
+    "F",    # pyflakes
+    "I",    # import sorting
+    "UP",   # pyupgrade
+    "B",    # bugbear
+]
+ignore = [
+    "E501",  # line length is handled by the formatter, not the linter
+    "B008",  # FastAPI Depends()/Query() in defaults is idiomatic
+    "UP031",  # %-formatting is intentional in PAC JS template generation
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "pac_runtime", "proxy_server", "flora", "gfwlist", "whitelist"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pyright]
+pythonVersion = "3.13"
