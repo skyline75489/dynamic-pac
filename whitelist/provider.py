@@ -15,10 +15,9 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import List
 
 from .fetcher import fetch_domain_list
-from .pac_generator import generate_pac_content, PROXY_PLACEHOLDER
+from .pac_generator import generate_pac_content
 
 logger = logging.getLogger("dynamic-pac.whitelist")
 
@@ -26,12 +25,16 @@ logger = logging.getLogger("dynamic-pac.whitelist")
 # Configuration
 # ---------------------------------------------------------------------------
 WHITELIST_FALLBACK_PATH = os.getenv(
-    "WHITELIST_FALLBACK_PATH", "fallback_domains.json",
+    "WHITELIST_FALLBACK_PATH",
+    "fallback_domains.json",
 ).strip()
 
-WHITELIST_CACHE_TTL = int(os.getenv(
-    "WHITELIST_CACHE_TTL", "172800",
-))
+WHITELIST_CACHE_TTL = int(
+    os.getenv(
+        "WHITELIST_CACHE_TTL",
+        "172800",
+    )
+)
 
 FETCH_PROXY = os.getenv("FETCH_PROXY", "").strip() or None
 
@@ -53,19 +56,20 @@ def set_redis(client) -> None:
 # ---------------------------------------------------------------------------
 # Fallback file
 # ---------------------------------------------------------------------------
-def _save_fallback(domains: List[str]) -> None:
+def _save_fallback(domains: list[str]) -> None:
     path = Path(WHITELIST_FALLBACK_PATH)
     try:
         path.write_text(json.dumps(domains, indent=0) + "\n")
         logger.info(
             "Saved fallback domains to %s (%d domains)",
-            WHITELIST_FALLBACK_PATH, len(domains),
+            WHITELIST_FALLBACK_PATH,
+            len(domains),
         )
     except Exception:
         logger.exception("Failed to save fallback domains to %s", WHITELIST_FALLBACK_PATH)
 
 
-def _load_fallback() -> List[str] | None:
+def _load_fallback() -> list[str] | None:
     path = Path(WHITELIST_FALLBACK_PATH)
     if not path.is_file():
         return None
@@ -73,7 +77,8 @@ def _load_fallback() -> List[str] | None:
         domains = json.loads(path.read_text())
         logger.info(
             "Loaded fallback domains from %s (%d domains)",
-            WHITELIST_FALLBACK_PATH, len(domains),
+            WHITELIST_FALLBACK_PATH,
+            len(domains),
         )
         return domains
     except Exception:
@@ -84,7 +89,7 @@ def _load_fallback() -> List[str] | None:
 # ---------------------------------------------------------------------------
 # Redis read/write
 # ---------------------------------------------------------------------------
-async def _read_redis() -> List[str] | None:
+async def _read_redis() -> list[str] | None:
     if _redis is None:
         return None
     try:
@@ -99,7 +104,7 @@ async def _read_redis() -> List[str] | None:
     return None
 
 
-async def _write_redis(domains: List[str]) -> None:
+async def _write_redis(domains: list[str]) -> None:
     if _redis is None:
         return
     try:
@@ -110,7 +115,8 @@ async def _write_redis(domains: List[str]) -> None:
         )
         logger.info(
             "Written domains to Redis (TTL=%ds, %d domains)",
-            WHITELIST_CACHE_TTL, len(domains),
+            WHITELIST_CACHE_TTL,
+            len(domains),
         )
     except Exception:
         logger.exception("Redis write failed")
@@ -119,7 +125,7 @@ async def _write_redis(domains: List[str]) -> None:
 # ---------------------------------------------------------------------------
 # Remote fetch
 # ---------------------------------------------------------------------------
-def _fetch_remote() -> List[str] | None:
+def _fetch_remote() -> list[str] | None:
     try:
         return fetch_domain_list(proxy=FETCH_PROXY)
     except Exception:
@@ -130,7 +136,7 @@ def _fetch_remote() -> List[str] | None:
 # ---------------------------------------------------------------------------
 # Cached state (in-memory)
 # ---------------------------------------------------------------------------
-_cached_domains: List[str] | None = None
+_cached_domains: list[str] | None = None
 _cached_at: float = 0.0
 _generation_lock = asyncio.Lock()
 
@@ -161,7 +167,8 @@ async def fetch_and_cache_domain_data() -> None:
             _cached_domains = redis_data
             _cached_at = time.monotonic()
             logger.info(
-                "Cache seeded from Redis: %d domains", len(redis_data),
+                "Cache seeded from Redis: %d domains",
+                len(redis_data),
             )
             return
 
@@ -173,7 +180,8 @@ async def fetch_and_cache_domain_data() -> None:
             _cached_domains = fetched
             _cached_at = time.monotonic()
             logger.info(
-                "Cache seeded from remote: %d domains", len(fetched),
+                "Cache seeded from remote: %d domains",
+                len(fetched),
             )
             await _write_redis(fetched)
             await loop.run_in_executor(None, _save_fallback, fetched)
@@ -187,7 +195,8 @@ async def fetch_and_cache_domain_data() -> None:
             _cached_domains = fallback
             _cached_at = time.monotonic()
             logger.info(
-                "Cache seeded from fallback: %d domains", len(fallback),
+                "Cache seeded from fallback: %d domains",
+                len(fallback),
             )
             return
 
@@ -266,7 +275,8 @@ def _get_template() -> str:
     _cached_template_domain_count = len(_cached_domains)
     logger.info(
         "Generated whitelist PAC: %d bytes, %d domains",
-        len(_cached_template), _cached_template_domain_count,
+        len(_cached_template),
+        _cached_template_domain_count,
     )
     return _cached_template
 

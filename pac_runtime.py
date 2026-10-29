@@ -130,11 +130,7 @@ def ts_direct_check_js() -> str:
     """
     if not ts_passthrough_enabled():
         return ""
-    return (
-        "    if (/(^|\\.)ts\\.net$/.test(host)) {\n"
-        "        return 'DIRECT';\n"
-        "    }\n\n"
-    )
+    return "    if (/(^|\\.)ts\\.net$/.test(host)) {\n        return 'DIRECT';\n    }\n\n"
 
 
 def get_ts_cidrs_raw() -> list[str]:
@@ -224,22 +220,23 @@ def apply_alt_proxy_runtime(content: str, alt_proxy: str, server_tailnet: bool =
 
     if _FIND_PROXY_FUNC_RE.search(content):
         content = _FIND_PROXY_FUNC_RE.sub(
-            f"function {_ORIGINAL_NAME}(", content, count=1,
+            f"function {_ORIGINAL_NAME}(",
+            content,
+            count=1,
         )
     elif _FIND_PROXY_ASSIGN_RE.search(content):
         content = _FIND_PROXY_ASSIGN_RE.sub(
-            f"{_ORIGINAL_NAME} = function(", content, count=1,
+            f"{_ORIGINAL_NAME} = function(",
+            content,
+            count=1,
         )
     else:
         logger.warning("FindProxyForURL not found — alt proxy runtime not injected")
         return content
 
-    cidrs = ", ".join(
-        f"[{int(net.network_address)}, {net.prefixlen}]" for net in get_ts_cidrs()
-    )
+    cidrs = ", ".join(f"[{int(net.network_address)}, {net.prefixlen}]" for net in get_ts_cidrs())
     runtime = (
-        _RUNTIME_TEMPLATE
-        .replace("__DP_ALT_PROXY__", json.dumps(alt_proxy))
+        _RUNTIME_TEMPLATE.replace("__DP_ALT_PROXY__", json.dumps(alt_proxy))
         .replace("__DP_SERVER_TAILNET__", "true" if server_tailnet else "false")
         .replace("__DP_TS_CIDRS__", cidrs)
     )

@@ -6,10 +6,9 @@ for optimizing IP lookup performance in PAC files.
 """
 
 import ipaddress
-from typing import List
 
 
-def fregment_net(net: ipaddress.IPv4Network, mask_step: int = 2) -> List[ipaddress.IPv4Network]:
+def fregment_net(net: ipaddress.IPv4Network, mask_step: int = 2) -> list[ipaddress.IPv4Network]:
     """Fragment a network into subnets aligned to mask_step boundaries."""
     target_prefixlen = (net.prefixlen - 1) // mask_step * mask_step + mask_step
     try:
@@ -18,7 +17,9 @@ def fregment_net(net: ipaddress.IPv4Network, mask_step: int = 2) -> List[ipaddre
         return [net]
 
 
-def fregment_nets(nets: List[ipaddress.IPv4Network], mask_step: int = 2) -> List[ipaddress.IPv4Network]:
+def fregment_nets(
+    nets: list[ipaddress.IPv4Network], mask_step: int = 2
+) -> list[ipaddress.IPv4Network]:
     """Fragment multiple networks into subnets aligned to mask_step boundaries."""
     results = []
     for net in nets:
@@ -31,7 +32,9 @@ def hash_address(address: ipaddress.IPv4Address, mod_base: int) -> int:
     return int(address) % mod_base
 
 
-def hash_nets(nets: List[ipaddress.IPv4Network], mod_base: int) -> List[List[ipaddress.IPv4Network]]:
+def hash_nets(
+    nets: list[ipaddress.IPv4Network], mod_base: int
+) -> list[list[ipaddress.IPv4Network]]:
     """Distribute networks into hash buckets based on their network address."""
     hashed = [[] for _ in range(mod_base)]
     for net in nets:
@@ -40,9 +43,8 @@ def hash_nets(nets: List[ipaddress.IPv4Network], mod_base: int) -> List[List[ipa
     return hashed
 
 
-def calculate_prefix_range(networks: List[ipaddress.IPv4Network]) -> tuple:
+def calculate_prefix_range(networks: list[ipaddress.IPv4Network]) -> tuple:
     """Calculate the min and max prefix lengths in a network list."""
     if not networks:
         return (32, 0)
-    return (min(net.prefixlen for net in networks),
-            max(net.prefixlen for net in networks))
+    return (min(net.prefixlen for net in networks), max(net.prefixlen for net in networks))

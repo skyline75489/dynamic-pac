@@ -33,7 +33,13 @@ class ResponseTests(unittest.IsolatedAsyncioTestCase):
         reader.feed_eof()
         writer = RecordingWriter()
         await proxy._relay_response(
-            reader, writer, "example.com", 80, "DIRECT", "DIRECT", method,
+            reader,
+            writer,
+            "example.com",
+            80,
+            "DIRECT",
+            "DIRECT",
+            method,
         )
         return bytes(writer.data)
 
@@ -71,10 +77,8 @@ class ResponseTests(unittest.IsolatedAsyncioTestCase):
         for method, status in (("HEAD", 200), ("GET", 204), ("GET", 304)):
             with self.subTest(method=method, status=status):
                 result = await self.relay(
-                    (
-                        f"HTTP/1.1 {status} Test\r\nTransfer-Encoding: chunked\r\n"
-                        "\r\n"
-                    ).encode(), method,
+                    (f"HTTP/1.1 {status} Test\r\nTransfer-Encoding: chunked\r\n\r\n").encode(),
+                    method,
                 )
                 self.assertTrue(result.startswith(f"HTTP/1.1 {status}".encode()))
                 self.assertTrue(result.endswith(b"\r\n\r\n"))
@@ -91,14 +95,19 @@ class ResponseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_chunked_response_streams_before_completion(self):
         reader = asyncio.StreamReader()
-        reader.feed_data(
-            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
-            b"5\r\nhello\r\n"
-        )
+        reader.feed_data(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n")
         writer = RecordingWriter()
-        task = asyncio.create_task(proxy._relay_response(
-            reader, writer, "example.com", 80, "DIRECT", "DIRECT", "GET",
-        ))
+        task = asyncio.create_task(
+            proxy._relay_response(
+                reader,
+                writer,
+                "example.com",
+                80,
+                "DIRECT",
+                "DIRECT",
+                "GET",
+            )
+        )
         try:
             async with asyncio.timeout(1):
                 while b"hello" not in writer.data:
@@ -116,9 +125,17 @@ class ResponseTests(unittest.IsolatedAsyncioTestCase):
         reader = asyncio.StreamReader()
         reader.feed_data(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
         writer = RecordingWriter(retain=False)
-        task = asyncio.create_task(proxy._relay_response(
-            reader, writer, "example.com", 80, "DIRECT", "DIRECT", "GET",
-        ))
+        task = asyncio.create_task(
+            proxy._relay_response(
+                reader,
+                writer,
+                "example.com",
+                80,
+                "DIRECT",
+                "DIRECT",
+                "GET",
+            )
+        )
         size = 65 * 1024 * 1024
         try:
             reader.feed_data(f"{size:x}\r\n".encode())
@@ -201,7 +218,8 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
         for writer in self.writers:
             writer.close()
         await asyncio.gather(
-            *(writer.wait_closed() for writer in self.writers), return_exceptions=True,
+            *(writer.wait_closed() for writer in self.writers),
+            return_exceptions=True,
         )
         for server in self.servers:
             server.close()
@@ -261,7 +279,8 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
             )
             await writer.drain()
             self.assertEqual(
-                await reader.readuntil(b"\r\n\r\n"), b"HTTP/1.1 100 Continue\r\n\r\n",
+                await reader.readuntil(b"\r\n\r\n"),
+                b"HTTP/1.1 100 Continue\r\n\r\n",
             )
             writer.write(b"5\r\nhello\r\n0\r\nDigest: ignored\r\n\r\n" if chunked else b"hello")
             await writer.drain()
@@ -319,8 +338,7 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
         async def origin(reader, writer):
             await reader.readuntil(b"\r\n\r\n")
             writer.write(
-                b"HTTP/1.1 403 Forbidden\r\nTransfer-Encoding: chunked\r\n\r\n"
-                b"2\r\nno\r\n0\r\n\r\n"
+                b"HTTP/1.1 403 Forbidden\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nno\r\n0\r\n\r\n"
             )
             await writer.drain()
 
@@ -367,7 +385,10 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
             patch.object(proxy, "CONNECT_TIMEOUT", 0.1),
         ):
             result = await proxy._connect_with_failover(
-                "example.com", 80, "http", [("stalled", 1), ("backup", 2)],
+                "example.com",
+                80,
+                "http",
+                [("stalled", 1), ("backup", 2)],
             )
         self.assertEqual(attempts, [1, 2])
         self.assertEqual(result[2], "http://backup:2")
@@ -380,9 +401,7 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.Event().wait()
 
         port = await self.listen(origin)
-        response = await self.request(
-            f"HEAD http://127.0.0.1:{port}/ HTTP/1.1\r\n\r\n".encode()
-        )
+        response = await self.request(f"HEAD http://127.0.0.1:{port}/ HTTP/1.1\r\n\r\n".encode())
         self.assertTrue(response.startswith(b"HTTP/1.1 200"))
         self.assertTrue(response.endswith(b"\r\n\r\n"))
 
@@ -422,17 +441,19 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
         await bad_server.wait_closed()
         with (
             patch.object(proxy, "get_route", AsyncMock(return_value="PROXY")),
-            patch.object(proxy, "_upstream", {
-                "http": [("127.0.0.1", bad_port), ("127.0.0.1", port)],
-            }),
+            patch.object(
+                proxy,
+                "_upstream",
+                {
+                    "http": [("127.0.0.1", bad_port), ("127.0.0.1", port)],
+                },
+            ),
             patch.object(proxy.random, "shuffle"),
         ):
             reader, writer = await self.connect()
             writer.write(b"CONNECT example.com:443 HTTP/1.1\r\n\r\n")
             await writer.drain()
-            self.assertTrue(
-                (await reader.readuntil(b"\r\n\r\n")).startswith(b"HTTP/1.1 200")
-            )
+            self.assertTrue((await reader.readuntil(b"\r\n\r\n")).startswith(b"HTTP/1.1 200"))
             writer.write(b"ping")
             await writer.drain()
             self.assertEqual(await reader.readexactly(4), b"ping")
@@ -458,17 +479,14 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
             patch.object(proxy, "get_route", AsyncMock(return_value="PROXY")),
             patch.object(proxy, "_upstream", {"socks5": [("127.0.0.1", port)]}),
         ):
-            response = await self.request(
-                b"GET http://example.com/path?q=1 HTTP/1.1\r\n\r\n"
-            )
+            response = await self.request(b"GET http://example.com/path?q=1 HTTP/1.1\r\n\r\n")
         self.assertTrue(response.endswith(b"\r\n\r\nok"))
 
     async def test_chunked_response_with_standard_http_client(self):
         async def origin(reader, writer):
             await reader.readuntil(b"\r\n\r\n")
             writer.write(
-                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
-                b"5\r\nhello\r\n0\r\n\r\n"
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
             )
             await writer.drain()
 
@@ -488,10 +506,7 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_incomplete_chunks_are_detectable_by_http_client(self):
         async def origin(reader, writer):
             await reader.readuntil(b"\r\n\r\n")
-            writer.write(
-                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
-                b"5\r\nhello"
-            )
+            writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello")
             await writer.drain()
 
         port = await self.listen(origin)
@@ -512,8 +527,7 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_chunked_upload_returns_bad_request(self):
         reader, writer = await self.connect()
         writer.write(
-            b"POST http://example.com/ HTTP/1.1\r\nTransfer-Encoding: chunked\r\n"
-            b"\r\n5\r\nhelloXX"
+            b"POST http://example.com/ HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhelloXX"
         )
         writer.write_eof()
         with self.assertLogs(proxy.logger, level="WARNING"):

@@ -9,6 +9,7 @@ Two-phase design with Redis-backed caching:
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
@@ -16,13 +17,10 @@ import re
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Tuple
-
-import ipaddress
 
 from .ip_data import fetch_ip_data, merge_all
-from .network_ops import fregment_nets, hash_nets, calculate_prefix_range
-from .pac_generator import generate_pac_content_from_data, PROXY_PLACEHOLDER
+from .network_ops import calculate_prefix_range, fregment_nets, hash_nets
+from .pac_generator import PROXY_PLACEHOLDER, generate_pac_content_from_data
 
 logger = logging.getLogger("dynamic-pac.flora")
 
@@ -34,12 +32,16 @@ _PLACEHOLDER_RE = re.compile(
 # Configuration
 # ---------------------------------------------------------------------------
 FLORA_FALLBACK_PATH = os.getenv(
-    "FLORA_FALLBACK_PATH", "fallback_ip_cn.json",
+    "FLORA_FALLBACK_PATH",
+    "fallback_ip_cn.json",
 ).strip()
 
-FLORA_CACHE_TTL = int(os.getenv(
-    "FLORA_CACHE_TTL", "604800",  # 7 days
-))
+FLORA_CACHE_TTL = int(
+    os.getenv(
+        "FLORA_CACHE_TTL",
+        "604800",  # 7 days
+    )
+)
 
 FLORA_REDIS_KEY = "flora:ip_data"
 
@@ -60,31 +62,32 @@ def set_redis(client) -> None:
 # ---------------------------------------------------------------------------
 # Serialization helpers
 # ---------------------------------------------------------------------------
-def _serialize_nets(nets: List[ipaddress.IPv4Network]) -> List[str]:
+def _serialize_nets(nets: list[ipaddress.IPv4Network]) -> list[str]:
     return sorted(str(n) for n in nets)
 
 
-def _deserialize_nets(cidrs: List[str]) -> List[ipaddress.IPv4Network]:
+def _deserialize_nets(cidrs: list[str]) -> list[ipaddress.IPv4Network]:
     return [ipaddress.IPv4Network(c) for c in cidrs]
 
 
 # ---------------------------------------------------------------------------
 # Fallback file
 # ---------------------------------------------------------------------------
-def _save_fallback(results: List[ipaddress.IPv4Network]) -> None:
+def _save_fallback(results: list[ipaddress.IPv4Network]) -> None:
     path = Path(FLORA_FALLBACK_PATH)
     try:
         cidrs = _serialize_nets(results)
         path.write_text(json.dumps(cidrs, indent=0) + "\n")
         logger.info(
             "Saved fallback IP data to %s (%d networks)",
-            FLORA_FALLBACK_PATH, len(cidrs),
+            FLORA_FALLBACK_PATH,
+            len(cidrs),
         )
     except Exception:
         logger.exception("Failed to save fallback IP data to %s", FLORA_FALLBACK_PATH)
 
 
-def _load_fallback() -> Tuple[List[ipaddress.IPv4Network], int, int] | None:
+def _load_fallback() -> tuple[list[ipaddress.IPv4Network], int, int] | None:
     path = Path(FLORA_FALLBACK_PATH)
     if not path.is_file():
         return None
@@ -94,7 +97,8 @@ def _load_fallback() -> Tuple[List[ipaddress.IPv4Network], int, int] | None:
         min_p, max_p = calculate_prefix_range(results)
         logger.info(
             "Loaded fallback IP data from %s (%d networks)",
-            FLORA_FALLBACK_PATH, len(results),
+            FLORA_FALLBACK_PATH,
+            len(results),
         )
         return results, min_p, max_p
     except Exception:
@@ -105,7 +109,7 @@ def _load_fallback() -> Tuple[List[ipaddress.IPv4Network], int, int] | None:
 # ---------------------------------------------------------------------------
 # Redis read/write
 # ---------------------------------------------------------------------------
-async def _read_redis() -> Tuple[List[ipaddress.IPv4Network], int, int] | None:
+async def _read_redis() -> tuple[list[ipaddress.IPv4Network], int, int] | None:
     if _redis is None:
         return None
     try:
@@ -115,7 +119,8 @@ async def _read_redis() -> Tuple[List[ipaddress.IPv4Network], int, int] | None:
             results = _deserialize_nets(cidrs)
             min_p, max_p = calculate_prefix_range(results)
             logger.info(
-                "Loaded IP data from Redis (%d networks)", len(results),
+                "Loaded IP data from Redis (%d networks)",
+                len(results),
             )
             return results, min_p, max_p
         logger.info("Redis key %s not found", FLORA_REDIS_KEY)
@@ -124,7 +129,7 @@ async def _read_redis() -> Tuple[List[ipaddress.IPv4Network], int, int] | None:
     return None
 
 
-async def _write_redis(results: List[ipaddress.IPv4Network]) -> None:
+async def _write_redis(results: list[ipaddress.IPv4Network]) -> None:
     if _redis is None:
         return
     try:
@@ -132,7 +137,8 @@ async def _write_redis(results: List[ipaddress.IPv4Network]) -> None:
         await _redis.set(FLORA_REDIS_KEY, json.dumps(cidrs), ex=FLORA_CACHE_TTL)
         logger.info(
             "Written IP data to Redis (TTL=%ds, %d networks)",
-            FLORA_CACHE_TTL, len(cidrs),
+            FLORA_CACHE_TTL,
+            len(cidrs),
         )
     except Exception:
         logger.exception("Redis write failed")
@@ -141,7 +147,7 @@ async def _write_redis(results: List[ipaddress.IPv4Network]) -> None:
 # ---------------------------------------------------------------------------
 # APNIC fetch
 # ---------------------------------------------------------------------------
-def _fetch_apnic() -> Tuple[List[ipaddress.IPv4Network], int, int] | None:
+def _fetch_apnic() -> tuple[list[ipaddress.IPv4Network], int, int] | None:
     try:
         results = merge_all(fetch_ip_data())
         min_p, max_p = calculate_prefix_range(results)
@@ -154,7 +160,7 @@ def _fetch_apnic() -> Tuple[List[ipaddress.IPv4Network], int, int] | None:
 # ---------------------------------------------------------------------------
 # Cached state (in-memory)
 # ---------------------------------------------------------------------------
-_cached_results: List[ipaddress.IPv4Network] | None = None
+_cached_results: list[ipaddress.IPv4Network] | None = None
 _min_prefixlen: int = 32
 _max_prefixlen: int = 0
 _cached_at: float = 0.0
@@ -191,7 +197,9 @@ async def fetch_and_cache_ip_data() -> None:
             _cached_at = time.monotonic()
             logger.info(
                 "Cache seeded from Redis: %d IP ranges (prefix: [%d, %d])",
-                len(results), min_p, max_p,
+                len(results),
+                min_p,
+                max_p,
             )
             return
 
@@ -207,7 +215,9 @@ async def fetch_and_cache_ip_data() -> None:
             _cached_at = time.monotonic()
             logger.info(
                 "Cache seeded from APNIC: %d IP ranges (prefix: [%d, %d])",
-                len(results), min_p, max_p,
+                len(results),
+                min_p,
+                max_p,
             )
             # Persist for future boots
             await _write_redis(results)
@@ -226,13 +236,14 @@ async def fetch_and_cache_ip_data() -> None:
             _cached_at = time.monotonic()
             logger.info(
                 "Cache seeded from fallback: %d IP ranges (prefix: [%d, %d])",
-                len(results), min_p, max_p,
+                len(results),
+                min_p,
+                max_p,
             )
             return
 
         logger.error(
-            "All IP data sources exhausted — "
-            "Flora PAC will return 503 until a successful fetch"
+            "All IP data sources exhausted — Flora PAC will return 503 until a successful fetch"
         )
 
 
@@ -285,7 +296,7 @@ async def _do_refresh() -> None:
 def _build_template(
     hash_base: int,
     mask_step: int,
-) -> Tuple[str, int]:
+) -> tuple[str, int]:
     if _cached_results is None:
         raise RuntimeError("IP data not yet fetched")
 
@@ -293,19 +304,24 @@ def _build_template(
     hashed = hash_nets(fragmented, hash_base)
 
     content = generate_pac_content_from_data(
-        hashed, hash_base, mask_step,
-        _min_prefixlen, _max_prefixlen,
+        hashed,
+        hash_base,
+        mask_step,
+        _min_prefixlen,
+        _max_prefixlen,
     )
     return content, len(_cached_results)
 
 
 @lru_cache(maxsize=32)
-def _uncached_generate(hash_base: int, mask_step: int) -> Tuple[str, int]:
+def _uncached_generate(hash_base: int, mask_step: int) -> tuple[str, int]:
     content, rules_count = _build_template(hash_base, mask_step)
     logger.info(
-        "Generated Flora PAC: %d bytes, %d rules, "
-        "hash_base=%d, mask_step=%d",
-        len(content), rules_count, hash_base, mask_step,
+        "Generated Flora PAC: %d bytes, %d rules, hash_base=%d, mask_step=%d",
+        len(content),
+        rules_count,
+        hash_base,
+        mask_step,
     )
     return content, rules_count
 

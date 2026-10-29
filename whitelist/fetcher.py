@@ -9,7 +9,6 @@ We extract domains, filter out wildcard-only entries, and return a sorted list.
 
 import logging
 import re
-from typing import List
 
 import httpx
 
@@ -24,13 +23,13 @@ _DOMAIN_RE = re.compile(r"(?<==/).+?(?=/)")
 
 # Domains to skip (wildcard-only, not useful for PAC matching)
 _SKIP_PATTERNS = re.compile(
-    r"(^|\.)\*\.|"       # wildcard domains like *.example.com
-    r"\.\*$|"            # trailing wildcard
-    r"^\*$"              # bare asterisk
+    r"(^|\.)\*\.|"  # wildcard domains like *.example.com
+    r"\.\*$|"  # trailing wildcard
+    r"^\*$"  # bare asterisk
 )
 
 
-def fetch_domain_list(proxy: str | None = None) -> List[str]:
+def fetch_domain_list(proxy: str | None = None) -> list[str]:
     """Fetch and parse the domain whitelist from dnsmasq-china-list.
 
     Returns a sorted list of unique domain strings.
@@ -59,6 +58,7 @@ def fetch_domain_list(proxy: str | None = None) -> List[str]:
     result = sorted(domains)
     logger.info(
         "Fetched %d domains from dnsmasq-china-list (%d raw lines)",
-        len(result), len(text.splitlines()),
+        len(result),
+        len(text.splitlines()),
     )
     return result

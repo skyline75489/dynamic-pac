@@ -5,14 +5,12 @@ Generates a PAC file with an embedded domain whitelist as a JSON object.
 Uses __PROXY_PLACEHOLDER__ for serving-time proxy injection.
 """
 
-from typing import List
-
 from pac_runtime import ts_passthrough_enabled
 
 PROXY_PLACEHOLDER = "__PROXY_PLACEHOLDER__"
 
 
-def generate_pac_content(domains: List[str]) -> str:
+def generate_pac_content(domains: list[str]) -> str:
     """Generate a PAC file with the given domain whitelist.
 
     The proxy line uses PROXY_PLACEHOLDER so it can be injected at
@@ -26,8 +24,7 @@ def generate_pac_content(domains: List[str]) -> str:
     # Tailscale MagicDNS is only special-cased when Tailscale support is
     # configured (see pac_runtime.ts_passthrough_enabled).
     ts_check = (
-        ' || host.endsWith(".ts.net") || host == "ts.net"'
-        if ts_passthrough_enabled() else ""
+        ' || host.endsWith(".ts.net") || host == "ts.net"' if ts_passthrough_enabled() else ""
     )
 
     pac = f"""var proxy = '{PROXY_PLACEHOLDER}';

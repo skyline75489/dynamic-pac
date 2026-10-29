@@ -1,10 +1,58 @@
 import asyncio
-import json
 import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Response, Query, Request
+from fastapi import FastAPI, Query, Request, Response
+
+import proxy_server
+from flora.provider import (
+    fetch_and_cache_ip_data,
+    get_pac_content,
+)
+from flora.provider import (
+    is_ready as is_flora_ready,
+)
+from flora.provider import (
+    set_redis as set_flora_redis,
+)
+from gfwlist.provider import (
+    get_pac_content as get_gfwlist_pac,
+)
+from gfwlist.provider import (
+    get_rules as get_gfwlist_rules,
+)
+from gfwlist.provider import (
+    is_ready as is_gfwlist_ready,
+)
+from gfwlist.provider import (
+    seed_cache,
+)
+from gfwlist.provider import (
+    set_redis as set_gfwlist_redis,
+)
+from pac_runtime import (
+    apply_alt_proxy_runtime,
+    get_alt_proxy,
+    get_ts_cidrs,
+    select_proxy_chain,
+    ts_passthrough_enabled,
+)
+from whitelist.provider import (
+    fetch_and_cache_domain_data,
+)
+from whitelist.provider import (
+    get_domains as get_whitelist_domains,
+)
+from whitelist.provider import (
+    get_pac_content as get_whitelist_pac,
+)
+from whitelist.provider import (
+    is_ready as is_whitelist_ready,
+)
+from whitelist.provider import (
+    set_redis as set_whitelist_redis,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,50 +77,18 @@ logger = logging.getLogger("dynamic-pac.main")
 # ---------------------------------------------------------------------------
 # GFWList / remote PAC provider
 # ---------------------------------------------------------------------------
-from gfwlist.provider import (  # noqa: E402
-    seed_cache,
-    get_pac_content as get_gfwlist_pac,
-    get_rules as get_gfwlist_rules,
-    set_redis as set_gfwlist_redis,
-    is_ready as is_gfwlist_ready,
-)
-
-# ---------------------------------------------------------------------------
-# Flora PAC provider
-# ---------------------------------------------------------------------------
-from flora.provider import (  # noqa: E402
-    fetch_and_cache_ip_data,
-    get_pac_content,
-    set_redis as set_flora_redis,
-    is_ready as is_flora_ready,
-)
-
-# ---------------------------------------------------------------------------
-# Whitelist PAC provider
-# ---------------------------------------------------------------------------
-from whitelist.provider import (  # noqa: E402
-    fetch_and_cache_domain_data,
-    get_pac_content as get_whitelist_pac,
-    get_domains as get_whitelist_domains,
-    set_redis as set_whitelist_redis,
-    is_ready as is_whitelist_ready,
-)
-
 # ---------------------------------------------------------------------------
 # Proxy server
 # ---------------------------------------------------------------------------
-import proxy_server  # noqa: E402
-
+# ---------------------------------------------------------------------------
+# Flora PAC provider
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Tailnet-aware proxy selection (PAC side)
 # ---------------------------------------------------------------------------
-from pac_runtime import (  # noqa: E402
-    apply_alt_proxy_runtime,
-    get_alt_proxy,
-    get_ts_cidrs,
-    select_proxy_chain,
-    ts_passthrough_enabled,
-)
+# ---------------------------------------------------------------------------
+# Whitelist PAC provider
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Redis (optional)
@@ -92,6 +108,7 @@ def _minify_js(content: str) -> str:
     import rjsmin
 
     return rjsmin.jsmin(content)
+
 
 # ---------------------------------------------------------------------------
 # App
@@ -151,16 +168,26 @@ async def _lifespan(_app: FastAPI):
     if _redis is not None:
         await _redis.aclose()
 
+
 app = FastAPI(lifespan=_lifespan)
 
 
 @app.get("/proxy.pac")
 async def proxy_pac(
     request: Request,
-    source: str = Query("remote", description="PAC source: 'remote' (gfwlist), 'flora' (China IPs), or 'whitelist' (Chinese domains)"),
-    hash_base: int = Query(3011, ge=1001, le=99999, description="Hash table size for Flora PAC (default: 3011)"),
-    mask_step: int = Query(2, ge=1, le=8, description="Network mask fragmentation step for Flora PAC (default: 2)"),
-    minify: bool = Query(False, description="Minify the resulting PAC by stripping comments and whitespace"),
+    source: str = Query(
+        "remote",
+        description="PAC source: 'remote' (gfwlist), 'flora' (China IPs), or 'whitelist' (Chinese domains)",
+    ),
+    hash_base: int = Query(
+        3011, ge=1001, le=99999, description="Hash table size for Flora PAC (default: 3011)"
+    ),
+    mask_step: int = Query(
+        2, ge=1, le=8, description="Network mask fragmentation step for Flora PAC (default: 2)"
+    ),
+    minify: bool = Query(
+        False, description="Minify the resulting PAC by stripping comments and whitespace"
+    ),
 ):
     # Tailnet-aware proxy selection: clients inside the tailnet CIDRs get
     # the alternative proxy chain (PAC_PROXY_TS_ALT) baked into the PAC.
@@ -292,12 +319,8 @@ async def debug_proxy():
     socks5_list = proxy_server._upstream.get("socks5", [])
     http_list = proxy_server._upstream.get("http", [])
     return {
-        "upstream_socks5": [
-            {"host": h, "port": p} for h, p in socks5_list
-        ],
-        "upstream_http": [
-            {"host": h, "port": p} for h, p in http_list
-        ],
+        "upstream_socks5": [{"host": h, "port": p} for h, p in socks5_list],
+        "upstream_http": [{"host": h, "port": p} for h, p in http_list],
         # Backwards-compat: first SOCKS5 entry (None if none configured)
         "upstream_host": socks5_list[0][0] if socks5_list else None,
         "upstream_port": socks5_list[0][1] if socks5_list else None,
@@ -306,9 +329,7 @@ async def debug_proxy():
         "proxy_count": len(proxy_server._proxy_set),
         "default_route": proxy_server._default_route,
         "route_google": await proxy_server.get_route("google.com"),
-        "route_k8s": await proxy_server.get_route(
-            "homeassistant.homeassistant.svc.cluster.local"
-        ),
+        "route_k8s": await proxy_server.get_route("homeassistant.homeassistant.svc.cluster.local"),
         "tailnet": {
             "passthrough_enabled": ts_passthrough_enabled(),
             "alt_proxy": get_alt_proxy(),

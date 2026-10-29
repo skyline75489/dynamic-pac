@@ -7,24 +7,24 @@ generated content can be cached and proxy injected at serving time.
 """
 
 import ipaddress
-from typing import List
 
-from .ip_data import merge_all
-from .network_ops import fregment_nets, hash_nets, calculate_prefix_range
 from pac_runtime import ts_direct_check_js
 
-PROXY_PLACEHOLDER = '__PROXY_PLACEHOLDER__'
+from .ip_data import merge_all
+from .network_ops import calculate_prefix_range, fregment_nets, hash_nets
+
+PROXY_PLACEHOLDER = "__PROXY_PLACEHOLDER__"
 
 
-def generate_balanced_proxy_js(proxies: List[str], balance: str) -> str:
+def generate_balanced_proxy_js(proxies: list[str], balance: str) -> str:
     """Generate JavaScript code for proxy selection."""
-    if balance == 'no':
-        return "return '%s' ;" % (';'.join(proxies))
-    elif balance == 'local_ip':
+    if balance == "no":
+        return "return '%s' ;" % (";".join(proxies))
+    elif balance == "local_ip":
         return (
             "  var local_ip_balance = function(proxies) {\n"
             "    var i, k, l, myseg, s, _i;\n"
-            "    myseg = parseInt(myIpAddress().split(\".\")[3]);\n"
+            '    myseg = parseInt(myIpAddress().split(".")[3]);\n'
             "    l = proxies.length;\n"
             "    k = myseg %% l;\n"
             "    s = '';\n"
@@ -33,10 +33,10 @@ def generate_balanced_proxy_js(proxies: List[str], balance: str) -> str:
             "    }\n"
             "    return s;\n"
             "  };\n"
-            + "  return local_ip_balance([%s]);\n" % (
-                ','.join("'%s'" % p for p in proxies))
+            + "  return local_ip_balance([%s]);\n"
+            % (",".join("'%s'" % p for p in proxies))
         )
-    elif balance == 'host':
+    elif balance == "host":
         return (
             "  var target_host_balance = function(proxies, host) {\n"
             "    var hash_string, i, k, l, s, _i;\n"
@@ -59,18 +59,18 @@ def generate_balanced_proxy_js(proxies: List[str], balance: str) -> str:
             "    }\n"
             "    return s;\n"
             "  };\n"
-            + "  return target_host_balance([%s], host);\n" % (
-                ','.join("'%s'" % p for p in proxies))
+            + "  return target_host_balance([%s], host);\n"
+            % (",".join("'%s'" % p for p in proxies))
         )
     return "return 'DIRECT';"
 
 
-def generate_no_proxy_js(no_proxy: List[str]) -> str:
+def generate_no_proxy_js(no_proxy: list[str]) -> str:
     """Generate JavaScript condition code for no-proxy rules."""
-    s = ''
+    s = ""
     for n in no_proxy:
         try:
-            ip = ipaddress.ip_address(n)
+            ipaddress.ip_address(n)
             s += " ip == '%s' ||" % n
             continue
         except ValueError:
@@ -91,7 +91,7 @@ def generate_template_content(
     mask_step: int,
     min_prefixlen: int,
     max_prefixlen: int,
-    no_proxy: List[str],
+    no_proxy: list[str],
 ) -> str:
     """
     Generate the complete PAC file content as a string, using PROXY_PLACEHOLDER
@@ -186,7 +186,8 @@ function FindProxyForURL(url, host) {
         else:
             pac += "\n        empty_array,"
 
-    pac += """
+    pac += (
+        """
     ];
 
     if (isPlainHostName(host)
@@ -196,17 +197,24 @@ function FindProxyForURL(url, host) {
         return 'DIRECT';
     }
 
-""" + ts_direct_check_js() + """
+"""
+        + ts_direct_check_js()
+        + """
     var ip = dnsResolve(host);
 
-    if (ip == null || ip == '' || """ + generate_no_proxy_js(no_proxy) + """ lookup_ip(ip)) {
+    if (ip == null || ip == '' || """
+        + generate_no_proxy_js(no_proxy)
+        + """ lookup_ip(ip)) {
         return 'DIRECT';
     }
 
-    return '""" + PROXY_PLACEHOLDER + """' ;
+    return '"""
+        + PROXY_PLACEHOLDER
+        + """' ;
 
 }
 """
+    )
     return pac
 
 
@@ -216,7 +224,7 @@ def generate_pac_content_from_data(
     mask_step: int,
     min_prefixlen: int,
     max_prefixlen: int,
-    no_proxy: List[str] | None = None,
+    no_proxy: list[str] | None = None,
 ) -> str:
     """
     Generate PAC template from pre-processed hashed data.
@@ -226,12 +234,14 @@ def generate_pac_content_from_data(
     serving-time injection.
     """
     if no_proxy is None:
-        no_proxy = ['192.168.0.0/24']
+        no_proxy = ["192.168.0.0/24"]
 
     return generate_template_content(
         hashed_results,
-        hash_base, mask_step,
-        min_prefixlen, max_prefixlen,
+        hash_base,
+        mask_step,
+        min_prefixlen,
+        max_prefixlen,
         no_proxy,
     )
 
@@ -239,17 +249,18 @@ def generate_pac_content_from_data(
 def generate_flora_content(
     hash_base: int = 3011,
     mask_step: int = 2,
-    no_proxy: List[str] | None = None,
+    no_proxy: list[str] | None = None,
 ) -> str:
     """
     Fetch China IP data, build the hash table, and return a PAC template
     with the proxy line as __PROXY_PLACEHOLDER__.
     """
     import logging
+
     logger = logging.getLogger("dynamic-pac.flora")
 
     if no_proxy is None:
-        no_proxy = ['192.168.0.0/24']
+        no_proxy = ["192.168.0.0/24"]
 
     logger.info("Fetching China IP ranges from APNIC...")
     results = merge_all(fetch_ip_data())
@@ -263,8 +274,10 @@ def generate_flora_content(
 
     content = generate_pac_content_from_data(
         hashed_results,
-        hash_base, mask_step,
-        min_prefixlen, max_prefixlen,
+        hash_base,
+        mask_step,
+        min_prefixlen,
+        max_prefixlen,
         no_proxy,
     )
 
@@ -273,9 +286,11 @@ def generate_flora_content(
     avg_len = float(len(results)) / none_empty_count if none_empty_count > 0 else 0
     steps = (max_prefixlen - min_prefixlen) / mask_step + 1
     logger.info(
-        "Flora PAC generated: %d bytes, %d rules, "
-        "avg match length %.2f, %d steps",
-        len(content), len(results), avg_len, steps,
+        "Flora PAC generated: %d bytes, %d rules, avg match length %.2f, %d steps",
+        len(content),
+        len(results),
+        avg_len,
+        steps,
     )
 
     return content

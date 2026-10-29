@@ -68,9 +68,9 @@ _rules_loaded = False
 
 
 def configure(
-        get_direct_domains: Callable[[], set[str] | None],
-        get_proxy_domains: Callable[[], set[str] | None] | None = None,
-        default_route: str = "DIRECT",
+    get_direct_domains: Callable[[], set[str] | None],
+    get_proxy_domains: Callable[[], set[str] | None] | None = None,
+    default_route: str = "DIRECT",
 ) -> None:
     """Configure the proxy server's domain data sources.
 
@@ -86,6 +86,7 @@ def configure(
 
 
 # ── GFWList source helpers (used by app.py in gfwlist mode) ────────────────
+
 
 def _build_domain_sets(rules: list) -> tuple[set[str], set[str]]:
     """Build direct and proxy sets from a parsed GFWList rules array.
@@ -124,6 +125,7 @@ def get_gfwlist_proxy_domains() -> set[str] | None:
 
 
 # ── Proxy config parsing ──────────────────────────────────────────────────
+
 
 def _parse_proxy_config(proxy_str: str) -> dict[str, list[tuple[str, int]]]:
     """Extract upstream proxies from a PAC proxy string.
@@ -171,8 +173,10 @@ def refresh_rules() -> bool:
 
     logger.info(
         "Rules refreshed: %d direct, %d proxy entries, %d upstreams, default=%s",
-        len(direct), len(proxy),
-        sum(len(v) for v in _upstream.values()), _default_route,
+        len(direct),
+        len(proxy),
+        sum(len(v) for v in _upstream.values()),
+        _default_route,
     )
     return True
 
@@ -180,24 +184,37 @@ def refresh_rules() -> bool:
 # ---------------------------------------------------------------------------
 # Hardcoded internal/local domains — always DIRECT regardless of mode
 # ---------------------------------------------------------------------------
-_ALWAYS_DIRECT = frozenset({
-    # Kubernetes internal
-    "svc", "svc.cluster.local",
-    # mDNS / local network
-    "local", "localhost",
-    # RFC 1918 reverse lookup
-    "10.in-addr.arpa", "16.172.in-addr.arpa",
-    "17.172.in-addr.arpa", "18.172.in-addr.arpa",
-    "19.172.in-addr.arpa", "20.172.in-addr.arpa",
-    "21.172.in-addr.arpa", "22.172.in-addr.arpa",
-    "23.172.in-addr.arpa", "24.172.in-addr.arpa",
-    "25.172.in-addr.arpa", "26.172.in-addr.arpa",
-    "27.172.in-addr.arpa", "28.172.in-addr.arpa",
-    "29.172.in-addr.arpa", "30.172.in-addr.arpa",
-    "31.172.in-addr.arpa", "168.192.in-addr.arpa",
-    # HomeAssistant internal
-    "homeassistant.local",
-})
+_ALWAYS_DIRECT = frozenset(
+    {
+        # Kubernetes internal
+        "svc",
+        "svc.cluster.local",
+        # mDNS / local network
+        "local",
+        "localhost",
+        # RFC 1918 reverse lookup
+        "10.in-addr.arpa",
+        "16.172.in-addr.arpa",
+        "17.172.in-addr.arpa",
+        "18.172.in-addr.arpa",
+        "19.172.in-addr.arpa",
+        "20.172.in-addr.arpa",
+        "21.172.in-addr.arpa",
+        "22.172.in-addr.arpa",
+        "23.172.in-addr.arpa",
+        "24.172.in-addr.arpa",
+        "25.172.in-addr.arpa",
+        "26.172.in-addr.arpa",
+        "27.172.in-addr.arpa",
+        "28.172.in-addr.arpa",
+        "29.172.in-addr.arpa",
+        "30.172.in-addr.arpa",
+        "31.172.in-addr.arpa",
+        "168.192.in-addr.arpa",
+        # HomeAssistant internal
+        "homeassistant.local",
+    }
+)
 
 
 def _is_always_direct(host: str) -> bool:
@@ -210,14 +227,13 @@ def _is_always_direct(host: str) -> bool:
         if host_lower.endswith(suffix):
             return True
     # Tailscale MagicDNS — only when Tailscale support is configured
-    if ts_passthrough_enabled() and (
-        host_lower == "ts.net" or host_lower.endswith(".ts.net")
-    ):
+    if ts_passthrough_enabled() and (host_lower == "ts.net" or host_lower.endswith(".ts.net")):
         return True
     return False
 
 
 # ── Host matching ──────────────────────────────────────────────────────────
+
 
 def _is_private_ip(host: str) -> bool:
     """Check if host is a bare IP address in a private range."""
@@ -336,6 +352,7 @@ def _match_domain(host: str, domain_set: set[str]) -> bool:
 
 # ── Upstream selection ─────────────────────────────────────────────────────
 
+
 def _select_proxy_url() -> tuple[str, list[tuple[str, int]]] | None:
     """Pick a scheme and return (scheme, candidates).
 
@@ -354,14 +371,15 @@ def _select_proxy_url() -> tuple[str, list[tuple[str, int]]] | None:
 
 # ── Data piping ────────────────────────────────────────────────────────────
 
-async def _pipe(reader: asyncio.StreamReader,
-                writer: asyncio.StreamWriter) -> None:
+
+async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     """Bidirectional data copy until EOF or error."""
     try:
         while True:
             if IDLE_TIMEOUT > 0:
                 data = await asyncio.wait_for(
-                    reader.read(65536), timeout=IDLE_TIMEOUT,
+                    reader.read(65536),
+                    timeout=IDLE_TIMEOUT,
                 )
             else:
                 data = await reader.read(65536)
@@ -369,7 +387,7 @@ async def _pipe(reader: asyncio.StreamReader,
                 break
             writer.write(data)
             await writer.drain()
-    except (ConnectionError, asyncio.TimeoutError, OSError):
+    except (TimeoutError, ConnectionError, OSError):
         pass
     finally:
         try:
@@ -380,8 +398,10 @@ async def _pipe(reader: asyncio.StreamReader,
 
 # ── HTTP header reading helpers ────────────────────────────────────────────
 
+
 async def _read_request_headers(
-    reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
 ) -> tuple[bytes, dict[str, str]] | None:
     """Read the request line + headers, return (raw_request_line, headers).
 
@@ -390,7 +410,7 @@ async def _read_request_headers(
     """
     try:
         data = await asyncio.wait_for(reader.readline(), timeout=HEADER_TIMEOUT)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return None
     if not data:
         return None
@@ -404,15 +424,15 @@ async def _read_request_headers(
     while True:
         try:
             hdr = await asyncio.wait_for(
-                reader.readline(), timeout=HEADER_TIMEOUT,
+                reader.readline(),
+                timeout=HEADER_TIMEOUT,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
         header_bytes += len(hdr)
         if header_bytes > MAX_HEADER_BYTES:
             writer.write(
-                b"HTTP/1.1 431 Request Header Fields Too Large\r\n"
-                b"Connection: close\r\n\r\n"
+                b"HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n"
             )
             await writer.drain()
             return None
@@ -440,8 +460,10 @@ async def _read_request_headers(
 
 # ── Connection handler ─────────────────────────────────────────────────────
 
+
 async def handle_connection(
-    reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
 ) -> None:
     """Top-level dispatch: CONNECT → tunnel, anything else → HTTP forward."""
     try:
@@ -469,16 +491,17 @@ async def handle_connection(
             # only support proxy-style requests on this port.
             if not (target.startswith("http://") or target.startswith("https://")):
                 writer.write(
-                    b"HTTP/1.1 400 Bad Request\r\n"
-                    b"Content-Length: 0\r\n"
-                    b"Connection: close\r\n\r\n"
+                    b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 )
                 await writer.drain()
                 return
             await _handle_http_forward(
-                reader, writer, request_line, headers,
+                reader,
+                writer,
+                request_line,
+                headers,
             )
-    except (ConnectionError, OSError, asyncio.TimeoutError) as e:
+    except (TimeoutError, ConnectionError, OSError) as e:
         logger.debug("Connection error: %s", e)
     except Exception:
         logger.exception("Unexpected error in connection handler")
@@ -491,9 +514,12 @@ async def handle_connection(
 
 # ── CONNECT (tunnel) handler ───────────────────────────────────────────────
 
+
 async def _handle_connect(
-    reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
-    target: str, _headers: dict[str, str],
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    target: str,
+    _headers: dict[str, str],
 ) -> None:
     """Tunnel raw bytes to host:port via DIRECT or upstream proxy."""
     if target.startswith("[") and "]:" in target:
@@ -533,7 +559,10 @@ async def _handle_connect(
         if upstream is not None:
             scheme, candidates = upstream
             upstream_reader, upstream_writer, chosen = await _connect_with_failover(
-                host, port, scheme, candidates,
+                host,
+                port,
+                scheme,
+                candidates,
             )
         else:
             upstream_reader, upstream_writer = await asyncio.wait_for(
@@ -541,7 +570,7 @@ async def _handle_connect(
                 timeout=CONNECT_TIMEOUT,
             )
             chosen = "DIRECT"
-    except (OSError, ConnectionError, ValueError, asyncio.TimeoutError) as e:
+    except (TimeoutError, OSError, ConnectionError, ValueError) as e:
         logger.warning("Connect failed: %s:%d -> %s: %s", host, port, route, e)
         writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
         await writer.drain()
@@ -554,7 +583,8 @@ async def _handle_connect(
     task_a = asyncio.create_task(_pipe(reader, upstream_writer))
     task_b = asyncio.create_task(_pipe(upstream_reader, writer))
     _, pending = await asyncio.wait(
-        [task_a, task_b], return_when=asyncio.FIRST_COMPLETED,
+        [task_a, task_b],
+        return_when=asyncio.FIRST_COMPLETED,
     )
     for task in pending:
         task.cancel()
@@ -563,8 +593,13 @@ async def _handle_connect(
 
 
 async def _open_upstream_stream(
-    host: str, port: int, scheme: str, proxy_host: str, proxy_port: int,
-    *, forward_http: bool = False,
+    host: str,
+    port: int,
+    scheme: str,
+    proxy_host: str,
+    proxy_port: int,
+    *,
+    forward_http: bool = False,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
     """Open a raw stream to host:port via the given upstream.
 
@@ -584,9 +619,12 @@ async def _open_upstream_stream(
 
 
 async def _connect_with_failover(
-    host: str, port: int, scheme: str,
+    host: str,
+    port: int,
+    scheme: str,
     candidates: list[tuple[str, int]],
-    *, forward_http: bool = False,
+    *,
+    forward_http: bool = False,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
     """Open a stream via one of the upstreams, with budgeted failover.
 
@@ -623,28 +661,46 @@ async def _connect_with_failover(
         tried.append(f"{ph}:{pp}")
         try:
             coro = _open_upstream_stream(
-                host, port, scheme, ph, pp, forward_http=forward_http,
+                host,
+                port,
+                scheme,
+                ph,
+                pp,
+                forward_http=forward_http,
             )
             reader, writer, chosen = await asyncio.wait_for(
-                coro, timeout=slice_budget,
+                coro,
+                timeout=slice_budget,
             )
             return reader, writer, chosen
-        except (OSError, ConnectionError, ValueError,
-                asyncio.TimeoutError, asyncio.IncompleteReadError) as e:
+        except (
+            TimeoutError,
+            OSError,
+            ConnectionError,
+            ValueError,
+            asyncio.IncompleteReadError,
+        ) as e:
             last_err = e
             logger.debug(
                 "Upstream %s://%s:%s failed for %s:%d: %s",
-                scheme, ph, pp, host, port, e,
+                scheme,
+                ph,
+                pp,
+                host,
+                port,
+                e,
             )
             continue
     raise ConnectionError(
-        f"all upstreams failed for {host}:{port} "
-        f"(tried {tried}, last error: {last_err})"
+        f"all upstreams failed for {host}:{port} (tried {tried}, last error: {last_err})"
     )
 
 
 async def _socks5_connect(
-    host: str, port: int, proxy_host: str, proxy_port: int,
+    host: str,
+    port: int,
+    proxy_host: str,
+    proxy_port: int,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Connect to host:port through a SOCKS5 proxy. Returns (reader, writer)."""
     reader, writer = await asyncio.open_connection(proxy_host, proxy_port)
@@ -660,21 +716,17 @@ async def _socks5_connect(
         except ValueError:
             host_bytes = host.encode("idna")
             if len(host_bytes) > 255:
-                raise ValueError("SOCKS5 destination hostname is too long")
+                raise ValueError("SOCKS5 destination hostname is too long") from None
             encoded_host = b"\x03" + bytes([len(host_bytes)]) + host_bytes
         else:
-            encoded_host = (
-                b"\x01" if address.version == 4 else b"\x04"
-            ) + address.packed
+            encoded_host = (b"\x01" if address.version == 4 else b"\x04") + address.packed
         req = b"\x05\x01\x00" + encoded_host + port.to_bytes(2, "big")
         writer.write(req)
         await writer.drain()
 
         resp = await reader.readexactly(4)
         if resp[0] != 0x05 or resp[1] != 0x00:
-            raise ValueError(
-                f"SOCKS5 connect failed for {host}:{port}: {resp.hex()}"
-            )
+            raise ValueError(f"SOCKS5 connect failed for {host}:{port}: {resp.hex()}")
         atype = resp[3]
         if atype == 0x01:
             await reader.readexactly(6)
@@ -695,7 +747,10 @@ async def _socks5_connect(
 
 
 async def _http_proxy_connect(
-    host: str, port: int, proxy_host: str, proxy_port: int,
+    host: str,
+    port: int,
+    proxy_host: str,
+    proxy_port: int,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Connect to host:port through an HTTP CONNECT proxy."""
     reader, writer = await asyncio.open_connection(proxy_host, proxy_port)
@@ -708,8 +763,7 @@ async def _http_proxy_connect(
         parts = resp.decode("iso-8859-1", errors="replace").split(" ", 2)
         if len(parts) < 2 or not parts[1].isdigit() or int(parts[1]) != 200:
             raise ValueError(
-                f"HTTP proxy connect failed for {host}:{port}: "
-                f"{resp.decode().strip()}"
+                f"HTTP proxy connect failed for {host}:{port}: {resp.decode().strip()}"
             )
         while True:
             line = await reader.readline()
@@ -726,6 +780,7 @@ async def _http_proxy_connect(
 
 # ── HTTP forward handler ───────────────────────────────────────────────────
 
+
 def _host_header(host: str, port: int, default_port: int | None = None) -> str:
     authority = f"[{host}]" if ":" in host else host
     return authority if port == default_port else f"{authority}:{port}"
@@ -733,15 +788,15 @@ def _host_header(host: str, port: int, default_port: int | None = None) -> str:
 
 def _hop_headers(headers: dict[str, str]) -> set[str]:
     return set(_HOP_BY_HOP) | {
-        token.strip().lower()
-        for token in headers.get("connection", "").split(",")
-        if token.strip()
+        token.strip().lower() for token in headers.get("connection", "").split(",") if token.strip()
     }
 
 
 async def _handle_http_forward(
-    reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
-    request_line: bytes, headers: dict[str, str],
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    request_line: bytes,
+    headers: dict[str, str],
 ) -> None:
     """Forward an HTTP request to origin (DIRECT or via upstream proxy).
 
@@ -783,20 +838,24 @@ async def _handle_http_forward(
 
     upstream = _select_proxy_url() if route == "PROXY" else None
 
-    is_upgrade = (
-        headers.get("upgrade", "").lower() == "websocket"
-        and "upgrade" in {
-            token.strip().lower()
-            for token in headers.get("connection", "").split(",")
-        }
-    )
+    is_upgrade = headers.get("upgrade", "").lower() == "websocket" and "upgrade" in {
+        token.strip().lower() for token in headers.get("connection", "").split(",")
+    }
 
     # WebSocket upgrades need a long-lived raw stream both ways — same
     # pattern as a CONNECT tunnel. Hand off to the upgrade handler.
     if is_upgrade:
         await _handle_websocket_upgrade(
-            reader, writer, method, parts, headers, b"",
-            upstream, host, port, route,
+            reader,
+            writer,
+            method,
+            parts,
+            headers,
+            b"",
+            upstream,
+            host,
+            port,
+            route,
         )
         return
 
@@ -838,11 +897,12 @@ async def _handle_http_forward(
     try:
         if cl_header is not None:
             body = await asyncio.wait_for(
-                reader.readexactly(cl), timeout=IDLE_TIMEOUT if IDLE_TIMEOUT > 0 else None,
+                reader.readexactly(cl),
+                timeout=IDLE_TIMEOUT if IDLE_TIMEOUT > 0 else None,
             )
         elif is_chunked:
             body = await _read_chunked(reader, MAX_BODY)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("Request body timeout: %s", host)
         writer.write(b"HTTP/1.1 408 Request Timeout\r\nConnection: close\r\n\r\n")
         await writer.drain()
@@ -854,10 +914,7 @@ async def _handle_http_forward(
         return
 
     excluded = _hop_headers(headers) | {"expect"}
-    forward_headers = {
-        k: v for k, v in headers.items()
-        if k not in excluded
-    }
+    forward_headers = {k: v for k, v in headers.items() if k not in excluded}
     forward_headers["host"] = _host_header(host, port, 80)
     # We close the upstream socket after relaying; tell the origin.
     forward_headers["connection"] = "close"
@@ -882,7 +939,11 @@ async def _handle_http_forward(
         if upstream is not None:
             scheme, candidates = upstream
             upstream_reader, upstream_writer, chosen = await _connect_with_failover(
-                host, port, scheme, candidates, forward_http=True,
+                host,
+                port,
+                scheme,
+                candidates,
+                forward_http=True,
             )
         else:
             upstream_reader, upstream_writer = await asyncio.wait_for(
@@ -890,7 +951,7 @@ async def _handle_http_forward(
                 timeout=CONNECT_TIMEOUT,
             )
             chosen = "DIRECT"
-    except (OSError, ConnectionError, ValueError, asyncio.TimeoutError) as e:
+    except (TimeoutError, OSError, ConnectionError, ValueError) as e:
         logger.warning("Forward connect failed: %s -> %s: %s", host, route, e)
         writer.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
         await writer.drain()
@@ -915,7 +976,13 @@ async def _handle_http_forward(
     # Relay the response. Read status line + headers, then body.
     try:
         await _relay_response(
-            upstream_reader, writer, host, port, chosen, route, method,
+            upstream_reader,
+            writer,
+            host,
+            port,
+            chosen,
+            route,
+            method,
         )
     finally:
         try:
@@ -927,8 +994,12 @@ async def _handle_http_forward(
 async def _relay_response(
     upstream_reader: asyncio.StreamReader,
     client_writer: asyncio.StreamWriter,
-    host: str, port: int, chosen: str, route: str,
-    method: str, status_line: bytes | None = None,
+    host: str,
+    port: int,
+    chosen: str,
+    route: str,
+    method: str,
+    status_line: bytes | None = None,
 ) -> None:
     """Relay interim responses and stream a final, connection-closing response."""
     while True:
@@ -938,7 +1009,8 @@ async def _relay_response(
                     status_line = await upstream_reader.readline()
                 fields = status_line.split(None, 2)
                 if (
-                    len(fields) < 2 or fields[0] not in (b"HTTP/1.0", b"HTTP/1.1")
+                    len(fields) < 2
+                    or fields[0] not in (b"HTTP/1.0", b"HTTP/1.1")
                     or not fields[1].isdigit()
                     or not 100 <= int(fields[1]) <= 599
                 ):
@@ -973,7 +1045,7 @@ async def _relay_response(
             content_length = resp_headers.get("content-length")
             if content_length is not None and not re.fullmatch(r"[0-9]+", content_length):
                 raise ValueError("invalid upstream Content-Length")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Upstream response header timeout: %s", host)
             client_writer.write(
                 b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -1024,7 +1096,7 @@ async def _relay_response(
             await _relay_fixed_body(upstream_reader, client_writer, int(content_length))
         else:
             await _relay_until_eof(upstream_reader, client_writer)
-    except (ConnectionError, OSError, asyncio.TimeoutError, _ChunkedDecodeError) as e:
+    except (TimeoutError, ConnectionError, OSError, _ChunkedDecodeError) as e:
         logger.warning("Response body relay failed: %s: %s", host, e)
 
 
@@ -1068,7 +1140,8 @@ class _ChunkedDecodeError(Exception):
 
 
 async def _iter_chunked(
-    reader: asyncio.StreamReader, max_bytes: int | None = None,
+    reader: asyncio.StreamReader,
+    max_bytes: int | None = None,
 ) -> AsyncIterator[bytes]:
     """Decode chunks in bounded pieces, validating framing and discarding trailers."""
     total = 0
@@ -1076,11 +1149,13 @@ async def _iter_chunked(
     try:
         while True:
             size_line = await asyncio.wait_for(
-                reader.readline(), timeout=timeout,
+                reader.readline(),
+                timeout=timeout,
             )
             size_text = size_line[:-2].split(b";", 1)[0]
             if (
-                not size_line.endswith(b"\r\n") or len(size_line) > MAX_REQUEST_LINE
+                not size_line.endswith(b"\r\n")
+                or len(size_line) > MAX_REQUEST_LINE
                 or not re.fullmatch(rb"[0-9a-fA-F]+", size_text)
             ):
                 raise _ChunkedDecodeError("invalid or missing chunk size")
@@ -1091,7 +1166,8 @@ async def _iter_chunked(
                 trailer_bytes = 0
                 while True:
                     line = await asyncio.wait_for(
-                        reader.readline(), timeout=timeout,
+                        reader.readline(),
+                        timeout=timeout,
                     )
                     trailer_bytes += len(line)
                     if not line.endswith(b"\r\n") or trailer_bytes > MAX_HEADER_BYTES:
@@ -1103,7 +1179,8 @@ async def _iter_chunked(
             remaining = size
             while remaining:
                 data = await asyncio.wait_for(
-                    reader.read(min(65536, remaining)), timeout=timeout,
+                    reader.read(min(65536, remaining)),
+                    timeout=timeout,
                 )
                 if not data:
                     raise _ChunkedDecodeError("unexpected EOF in chunk data")
@@ -1112,7 +1189,7 @@ async def _iter_chunked(
                 yield data
             if await asyncio.wait_for(reader.readexactly(2), timeout=timeout) != b"\r\n":
                 raise _ChunkedDecodeError("missing chunk CRLF")
-    except (asyncio.IncompleteReadError, asyncio.TimeoutError, ValueError) as e:
+    except (TimeoutError, asyncio.IncompleteReadError, ValueError) as e:
         raise _ChunkedDecodeError(f"incomplete chunked body: {e}") from e
 
 
@@ -1121,9 +1198,12 @@ async def _handle_websocket_upgrade(
     client_writer: asyncio.StreamWriter,
     method: str,
     parts: SplitResult,
-    headers: dict[str, str], body: bytes,
+    headers: dict[str, str],
+    body: bytes,
     upstream: tuple[str, list[tuple[str, int]]] | None,
-    host: str, port: int, route: str,
+    host: str,
+    port: int,
+    route: str,
 ) -> None:
     """Handle a WebSocket upgrade by re-issuing the request over a raw socket.
 
@@ -1138,7 +1218,11 @@ async def _handle_websocket_upgrade(
         if upstream is not None:
             scheme, candidates = upstream
             upstream_reader, upstream_writer, chosen = await _connect_with_failover(
-                host, port, scheme, candidates, forward_http=True,
+                host,
+                port,
+                scheme,
+                candidates,
+                forward_http=True,
             )
         else:
             upstream_reader, upstream_writer = await asyncio.wait_for(
@@ -1146,11 +1230,9 @@ async def _handle_websocket_upgrade(
                 timeout=CONNECT_TIMEOUT,
             )
             chosen = "DIRECT"
-    except (OSError, ConnectionError, ValueError, asyncio.TimeoutError) as e:
+    except (TimeoutError, OSError, ConnectionError, ValueError) as e:
         logger.warning("WebSocket upstream connect failed: %s -> %s: %s", host, route, e)
-        client_writer.write(
-            b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
-        )
+        client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
         await client_writer.drain()
         return
 
@@ -1161,9 +1243,7 @@ async def _handle_websocket_upgrade(
         path_and_query = f"http://{_host_header(host, port, 80)}{path_and_query}"
 
     excluded = _hop_headers(headers)
-    forward_headers = {
-        k: v for k, v in headers.items() if k not in excluded
-    }
+    forward_headers = {k: v for k, v in headers.items() if k not in excluded}
     forward_headers["connection"] = "Upgrade"
     forward_headers["upgrade"] = "websocket"
     forward_headers["host"] = _host_header(host, port, 80)
@@ -1180,9 +1260,7 @@ async def _handle_websocket_upgrade(
         await upstream_writer.drain()
     except (ConnectionError, OSError) as e:
         logger.warning("WebSocket upstream write failed: %s: %s", host, e)
-        client_writer.write(
-            b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
-        )
+        client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
         await client_writer.drain()
         upstream_writer.close()
         return
@@ -1190,21 +1268,18 @@ async def _handle_websocket_upgrade(
     # Read the upstream response status line + headers, looking for 101.
     try:
         status_line = await asyncio.wait_for(
-            upstream_reader.readline(), timeout=RESPONSE_HEADER_TIMEOUT,
+            upstream_reader.readline(),
+            timeout=RESPONSE_HEADER_TIMEOUT,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("WebSocket upstream status timeout: %s", host)
-        client_writer.write(
-            b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\n\r\n"
-        )
+        client_writer.write(b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\n\r\n")
         await client_writer.drain()
         upstream_writer.close()
         return
 
     if not status_line:
-        client_writer.write(
-            b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
-        )
+        client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
         await client_writer.drain()
         upstream_writer.close()
         return
@@ -1212,9 +1287,7 @@ async def _handle_websocket_upgrade(
     try:
         parts_status = status_line.decode("iso-8859-1").strip().split(" ", 2)
         status_code = (
-            int(parts_status[1])
-            if len(parts_status) >= 2 and parts_status[1].isdigit()
-            else 0
+            int(parts_status[1]) if len(parts_status) >= 2 and parts_status[1].isdigit() else 0
         )
     except (ValueError, IndexError):
         status_code = 0
@@ -1223,8 +1296,14 @@ async def _handle_websocket_upgrade(
         logger.debug("WebSocket upgrade rejected: %s -> %d", host, status_code)
         try:
             await _relay_response(
-                upstream_reader, client_writer, host, port, chosen, route,
-                method, status_line,
+                upstream_reader,
+                client_writer,
+                host,
+                port,
+                chosen,
+                route,
+                method,
+                status_line,
             )
         finally:
             upstream_writer.close()
@@ -1235,13 +1314,14 @@ async def _handle_websocket_upgrade(
         client_writer.write(status_line)
         while True:
             line = await asyncio.wait_for(
-                upstream_reader.readline(), timeout=RESPONSE_HEADER_TIMEOUT,
+                upstream_reader.readline(),
+                timeout=RESPONSE_HEADER_TIMEOUT,
             )
             client_writer.write(line)
             if line in (b"\r\n", b"\n", b""):
                 break
         await client_writer.drain()
-    except (ConnectionError, OSError, asyncio.TimeoutError) as e:
+    except (TimeoutError, ConnectionError, OSError) as e:
         logger.warning("WebSocket response relay failed: %s: %s", host, e)
         upstream_writer.close()
         return
@@ -1250,7 +1330,8 @@ async def _handle_websocket_upgrade(
     task_a = asyncio.create_task(_pipe(client_reader, upstream_writer))
     task_b = asyncio.create_task(_pipe(upstream_reader, client_writer))
     _, pending = await asyncio.wait(
-        [task_a, task_b], return_when=asyncio.FIRST_COMPLETED,
+        [task_a, task_b],
+        return_when=asyncio.FIRST_COMPLETED,
     )
     for task in pending:
         task.cancel()
@@ -1259,7 +1340,8 @@ async def _handle_websocket_upgrade(
 
 
 async def _read_chunked(
-    reader: asyncio.StreamReader, max_bytes: int,
+    reader: asyncio.StreamReader,
+    max_bytes: int,
 ) -> bytes:
     """Buffer a validated request body within the upload limit."""
     buf = bytearray()
@@ -1270,18 +1352,28 @@ async def _read_chunked(
 
 # Headers that should not be forwarded by an HTTP proxy.
 # Per RFC 7230 §6.1.
-_HOP_BY_HOP = frozenset({
-    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-    "te", "trailer", "trailers", "transfer-encoding", "upgrade",
-    # "proxy-connection" is non-standard but common; strip for safety.
-    "proxy-connection",
-})
+_HOP_BY_HOP = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        # "proxy-connection" is non-standard but common; strip for safety.
+        "proxy-connection",
+    }
+)
 
 # ── Server lifecycle ───────────────────────────────────────────────────────
 
-async def start(host: str = "0.0.0.0",
-                port: int = 8888,
-                ready_event: asyncio.Event | None = None) -> None:
+
+async def start(
+    host: str = "0.0.0.0", port: int = 8888, ready_event: asyncio.Event | None = None
+) -> None:
     """Start the HTTP/CONNECT proxy server.
 
     Blocks until the server is stopped (call from a task).
@@ -1312,7 +1404,11 @@ async def start(host: str = "0.0.0.0",
 
     logger.info(
         "Proxy listening on %s:%d (%d direct, %d proxy, default=%s)",
-        host, port, len(_direct_set), len(_proxy_set), _default_route,
+        host,
+        port,
+        len(_direct_set),
+        len(_proxy_set),
+        _default_route,
     )
 
     try:

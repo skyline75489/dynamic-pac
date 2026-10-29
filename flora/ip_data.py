@@ -5,13 +5,13 @@ This module handles fetching IP range data from APNIC and merging
 adjacent networks for optimization.
 """
 
-import re
 import ipaddress
+import re
+
 import urllib3
-from typing import List
 
 
-def fetch_ip_data() -> List[ipaddress.IPv4Network]:
+def fetch_ip_data() -> list[ipaddress.IPv4Network]:
     """
     Fetch China IP ranges from APNIC and return as IPv4Network objects.
 
@@ -21,27 +21,27 @@ def fetch_ip_data() -> List[ipaddress.IPv4Network]:
     Raises:
         Exception: If network request fails or data parsing fails
     """
-    url = 'http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest'
+    url = "http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest"
 
     http = urllib3.PoolManager()
-    response = http.request('GET', url)
+    response = http.request("GET", url)
 
     if response.status != 200:
         raise Exception(f"Failed to fetch APNIC data: HTTP {response.status}")
 
-    data = response.data.decode('utf-8')
+    data = response.data.decode("utf-8")
 
-    cnregex = re.compile(r'apnic\|cn\|ipv4\|[0-9\.]+\|[0-9]+\|[0-9]+\|a.*', re.IGNORECASE)
+    cnregex = re.compile(r"apnic\|cn\|ipv4\|[0-9\.]+\|[0-9]+\|[0-9]+\|a.*", re.IGNORECASE)
     cndata = cnregex.findall(data)
 
     results = []
     for item in cndata:
         try:
-            unit_items = item.split('|')
+            unit_items = item.split("|")
             starting_ip = unit_items[3]
             num_ip = int(unit_items[4])
 
-            imask = 0xffffffff ^ (num_ip - 1)
+            imask = 0xFFFFFFFF ^ (num_ip - 1)
             imask = hex(imask)[2:]
             mask = [0] * 4
             mask[0] = imask[0:2]
@@ -61,22 +61,26 @@ def fetch_ip_data() -> List[ipaddress.IPv4Network]:
     return results
 
 
-def merge_nets(net1: ipaddress.IPv4Network, net2: ipaddress.IPv4Network) -> ipaddress.IPv4Network | None:
+def merge_nets(
+    net1: ipaddress.IPv4Network, net2: ipaddress.IPv4Network
+) -> ipaddress.IPv4Network | None:
     """Merge two adjacent networks if possible."""
     try:
         super_net1 = net1.supernet()
         super_net2 = net2.supernet()
 
-        if (super_net1 == super_net2 and
-            super_net1.network_address == net1.network_address and
-            super_net1.broadcast_address == net2.broadcast_address):
+        if (
+            super_net1 == super_net2
+            and super_net1.network_address == net1.network_address
+            and super_net1.broadcast_address == net2.broadcast_address
+        ):
             return super_net1
     except ValueError:
         pass
     return None
 
 
-def merge_all(networks: List[ipaddress.IPv4Network]) -> List[ipaddress.IPv4Network]:
+def merge_all(networks: list[ipaddress.IPv4Network]) -> list[ipaddress.IPv4Network]:
     """Merge all adjacent networks in a list to optimize."""
     if not networks:
         return []
@@ -89,12 +93,12 @@ def merge_all(networks: List[ipaddress.IPv4Network]) -> List[ipaddress.IPv4Netwo
             i += 1
             continue
 
-        merged_net = merge_nets(networks[i-1], networks[i])
+        merged_net = merge_nets(networks[i - 1], networks[i])
         if merged_net is None:
             i += 1
             continue
 
-        networks[i-1] = merged_net
+        networks[i - 1] = merged_net
         networks.pop(i)
         if i > 1:
             i -= 1

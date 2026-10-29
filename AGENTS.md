@@ -171,6 +171,30 @@ it works for the remote/gfwlist, flora and whitelist sources alike.
 With Tailscale enabled, `.ts.net` (and `ts.net`) hosts always resolve to
 `DIRECT` in the whitelist PAC, the flora PAC and the CONNECT proxy.
 
+## CI (Gitea Actions)
+
+Workflow at `.gitea/workflows/ci.yaml`, runs on push to `master`/`main`, on
+pull requests and via `workflow_dispatch`. Three jobs:
+
+- **lint** — `ruff check`, `ruff format --check`, and `compileall`
+- **test** — `python -m unittest discover -v -p 'test_*.py'`
+- **docker** — `docker build` smoke check (no push)
+
+Lint configuration lives in `pyproject.toml` (`[tool.ruff]`): line length 100,
+rules `E4 E7 E9 F I UP B`, with `E501`, `B008` and `UP031` ignored (`UP031`
+because `%`-formatting is intentional when emitting PAC JavaScript).
+
+Tests live in the repo root as `test_*.py` and use `unittest`; they import
+`proxy_server`, so `REMOTE_PAC_URL` is stubbed via `patch.dict`.
+
+Run the same checks locally:
+
+```bash
+pip install -r requirements.txt ruff
+ruff check . && ruff format --check .
+python -m unittest discover -v -p 'test_*.py'
+```
+
 ## Docker
 
 Uses `python:3.13-slim`. Exposes port 8080 (FastAPI) — 8888 (CONNECT proxy) is
